@@ -34,6 +34,10 @@ func WriteVariant(batchDir, id string, files map[string][]byte) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
+	// The batch dir itself must be traversable by uid 65534 whatever the umask.
+	if err := os.Chmod(batchDir, 0o755); err != nil {
+		return err
+	}
 	for name, data := range files {
 		clean := path.Clean(name)
 		if path.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {

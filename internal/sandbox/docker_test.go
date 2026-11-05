@@ -23,14 +23,10 @@ func dockerRunner(t *testing.T) *Docker {
 	return NewDocker(testImage, 180*time.Second)
 }
 
-// dockerBatch is variant() with a batch dir the unprivileged container user can traverse.
+// dockerBatch builds a one-variant batch (WriteVariant makes Dir traversable).
 func dockerBatch(t *testing.T, files map[string][]byte, ms ...mutate.Mutation) Batch {
 	t.Helper()
-	b := variant(t, files, ms...)
-	if err := os.Chmod(b.Dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return b
+	return variant(t, files, ms...)
 }
 
 func dockerRunOne(t *testing.T, b Batch) VariantResult {

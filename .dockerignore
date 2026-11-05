@@ -1,0 +1,10 @@
+.env
+.env.*
+data/
+work/
+bin/
+web/node_modules/
+web/dist/
+.git/
+.superpowers/
+.claude/

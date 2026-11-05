@@ -98,39 +98,51 @@ func (d *Docker) Run(ctx context.Context, b Batch) ([]VariantResult, error) {
 		return nil, err
 	}
 	res, perr := ParseResults(stdout, maxRunnerOutput)
+	// Read before our own cancel() below, which would set it for any parse error.
+	expired := ctx.Err()
 	if perr != nil {
 		cancel()
 	}
 	werr := cmd.Wait()
-	cerr := ctx.Err()
-	if cerr != nil {
+	if perr == nil && expired == nil {
+		// Context may have expired while Wait was blocked (clean parse).
+		expired = ctx.Err()
+	}
+	if ctx.Err() != nil {
 		// Killing the docker client does not stop the container; the original
 		// context is dead, so use a fresh one.
 		kctx, kcancel := context.WithTimeout(context.Background(), killWindow)
 		defer kcancel()
 		_ = exec.CommandContext(kctx, "docker", "kill", name).Run()
 	}
-	if perr != nil {
-		return nil, perr
+	msg := strings.TrimSpace(stderr.buf.String())
+	switch {
+	case expired != nil:
+		return nil, fmt.Errorf("docker run: %w: %s", expired, msg)
+	case perr != nil:
+		return nil, fmt.Errorf("%w: %s", perr, msg)
+	case werr != nil:
+		return nil, fmt.Errorf("docker run: %w: %s", werr, msg)
+	case len(res) != len(b.IDs):
+		return nil, fmt.Errorf("runner returned %d results for %d variants: %s", len(res), len(b.IDs), msg)
 	}
-	if werr != nil {
-		return nil, fmt.Errorf("docker run: %w: %s", werr, strings.TrimSpace(stderr.buf.String()))
-	}
-	if cerr != nil {
-		return nil, fmt.Errorf("docker run: %w", cerr)
-	}
-	if len(res) != len(b.IDs) {
-		return nil, fmt.Errorf("runner returned %d results for %d variants: %s",
-			len(res), len(b.IDs), strings.TrimSpace(stderr.buf.String()))
+	for i := range res {
+		if res[i].ID != b.IDs[i] {
+			return nil, fmt.Errorf("runner result %d has id %q, want %q: %s", i, res[i].ID, b.IDs[i], msg)
+		}
 	}
 	return res, nil
 }
 
 // GoVersion returns `go env GOVERSION` of the image toolchain.
 func (d *Docker) GoVersion(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, "docker", "run", "--rm", d.image, "go", "env", "GOVERSION").Output()
+	stderr := &cappedBuffer{max: maxStderr}
+	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", d.image, "go", "env", "GOVERSION")
+	cmd.Stderr = stderr
+	cmd.WaitDelay = waitDelay
+	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("docker go env GOVERSION: %w: %s", err, strings.TrimSpace(stderr.buf.String()))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
