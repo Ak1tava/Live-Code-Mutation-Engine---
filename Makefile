@@ -1,7 +1,9 @@
 .PHONY: image web build run test test-docker dev
 
+GO_VERSION ?= 1.27.3
+
 image:
-	docker build -f sandbox/Dockerfile --build-arg GO_VERSION=1.27.3 -t lcme-runner:latest .
+	docker build -f sandbox/Dockerfile --build-arg GO_VERSION=$(GO_VERSION) -t lcme-runner:latest .
 
 web:
 	cd web && npm install && npm run build
@@ -11,7 +13,7 @@ build:
 	go build -o bin/lcme-runner ./cmd/runner
 
 run:
-	./bin/lcme
+	set -a; [ -f .env ] && . ./.env; set +a; exec ./bin/lcme
 
 test:
 	go test ./...
