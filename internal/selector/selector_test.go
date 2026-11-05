@@ -1,0 +1,347 @@
+package selector
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"lcme/internal/mutate"
+	"lcme/internal/sandbox"
+)
+
+var runnerBin string
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "lcme-runner-selector")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	runnerBin = filepath.Join(dir, "lcme-runner")
+	if out, err := exec.Command("go", "build", "-o", runnerBin, "lcme/cmd/runner").CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "build runner: %v\n%s", err, out)
+		os.RemoveAll(dir)
+		os.Exit(1)
+	}
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+var abc = []string{"A", "B", "C"}
+
+// mk builds the 8 variant results for tests A, B, C from a failure predicate.
+func mk(fails func(mask int, test string) bool) [8]sandbox.VariantResult {
+	var r [8]sandbox.VariantResult
+	for mask := range r {
+		for _, name := range abc {
+			st := sandbox.StatusPass
+			if fails(mask, name) {
+				st = sandbox.StatusFail
+			}
+			r[mask].Tests = append(r[mask].Tests, sandbox.TestResult{Pkg: ".", Name: name, Status: st})
+		}
+	}
+	return r
+}
+
+func keys(names ...string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = "." + ":" + n
+	}
+	return out
+}
+
+func eq(a, b []string) bool { return strings.Join(a, ",") == strings.Join(b, ",") }
+
+func TestIndependentOK(t *testing.T) {
+	bit := map[string]int{"A": 0, "B": 1, "C": 2}
+	r := mk(func(mask int, test string) bool { return mask&(1<<bit[test]) != 0 })
+	killing, ok := Independent(r, keys(abc...))
+	if !ok {
+		t.Fatal("ok = false")
+	}
+	for i, n := range abc {
+		if !eq(killing[i], keys(n)) {
+			t.Errorf("killing[%d] = %v, want %v", i, killing[i], keys(n))
+		}
+	}
+}
+
+func TestIndependentMasked(t *testing.T) {
+	bit := map[string]int{"A": 0, "B": 1, "C": 2}
+	r := mk(func(mask int, test string) bool {
+		if test == "B" && mask&1 != 0 { // B also fails whenever mutation 0 is present
+			return true
+		}
+		return mask&(1<<bit[test]) != 0
+	})
+	if _, ok := Independent(r, keys(abc...)); ok {
+		t.Error("ok = true, want false")
+	}
+}
+
+func TestIndependentSharedTest(t *testing.T) {
+	r := mk(func(mask int, test string) bool { return test == "A" && mask != 0 })
+	if _, ok := Independent(r, keys(abc...)); ok {
+		t.Error("ok = true, want false")
+	}
+}
+
+func TestIndependentBuildError(t *testing.T) {
+	bit := map[string]int{"A": 0, "B": 1, "C": 2}
+	r := mk(func(mask int, test string) bool { return mask&(1<<bit[test]) != 0 })
+	r[3] = sandbox.VariantResult{BuildError: "boom"}
+	if _, ok := Independent(r, keys(abc...)); ok {
+		t.Error("ok = true, want false")
+	}
+}
+
+func TestScoreOrder(t *testing.T) {
+	c := func(k mutate.Kind, fn string, panicked bool) Candidate {
+		return Candidate{M: mutate.Mutation{Kind: k, Func: fn}, Panicked: panicked}
+	}
+	b, a, k := Score(c(mutate.Boundary, "f", false)), Score(c(mutate.Arith, "f", false)), Score(c(mutate.Constant, "f", false))
+	if !(b > a && a > k) {
+		t.Errorf("boundary=%d arith=%d constant=%d, want strictly decreasing", b, a, k)
+	}
+	if bp := Score(c(mutate.Boundary, "f", true)); bp >= b {
+		t.Errorf("panicked boundary %d >= plain boundary %d", bp, b)
+	}
+	if m := Score(c(mutate.Boundary, "main", false)); m >= b {
+		t.Errorf("main boundary %d >= non-main boundary %d", m, b)
+	}
+}
+
+// ---- integration ----
+
+func loadDir(t *testing.T, dir string) map[string][]byte {
+	t.Helper()
+	files := map[string][]byte{}
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		files[filepath.ToSlash(rel)] = b
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
+func goSources(files map[string][]byte) map[string][]byte {
+	out := map[string][]byte{}
+	for n, b := range files {
+		if strings.HasSuffix(n, ".go") && !strings.HasSuffix(n, "_test.go") {
+			out[n] = b
+		}
+	}
+	return out
+}
+
+func prepare(t *testing.T, dir string) (map[string][]byte, *Plan, string, error) {
+	t.Helper()
+	files := loadDir(t, dir)
+	work := filepath.Join(t.TempDir(), "work")
+	plan, err := Prepare(context.Background(), files, goSources(files), sandbox.NewLocal(runnerBin),
+		work, DefaultOptions, nil)
+	return files, plan, work, err
+}
+
+// runWith applies ms to files and runs the project once.
+func runWith(t *testing.T, files map[string][]byte, ms ...mutate.Mutation) sandbox.VariantResult {
+	t.Helper()
+	if len(ms) > 0 {
+		var err error
+		if files, err = mutate.Apply(files, ms); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	if err := sandbox.WriteVariant(dir, "v1", files); err != nil {
+		t.Fatal(err)
+	}
+	res, err := sandbox.NewLocal(runnerBin).Run(context.Background(), sandbox.Batch{Dir: dir, IDs: []string{"v1"}})
+	if err != nil || len(res) != 1 {
+		t.Fatalf("run: %v (%d results)", err, len(res))
+	}
+	return res[0]
+}
+
+func failed(v sandbox.VariantResult) []string {
+	var out []string
+	for _, tr := range v.Tests {
+		if tr.Status != sandbox.StatusPass {
+			out = append(out, tr.Key())
+		}
+	}
+	return out
+}
+
+func diffLines(a, b map[string][]byte) int {
+	n := 0
+	for name, ab := range a {
+		al := bytes.Split(ab, []byte("\n"))
+		bl := bytes.Split(b[name], []byte("\n"))
+		if len(al) != len(bl) {
+			n += 1000
+			continue
+		}
+		for i := range al {
+			if !bytes.Equal(al[i], bl[i]) {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+func TestPrepareTextkit(t *testing.T) {
+	files, plan, work, err := prepare(t, "../../examples/textkit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Mutations) != 3 || len(plan.KillingTests) != 3 {
+		t.Fatalf("mutations=%d killing=%d", len(plan.Mutations), len(plan.KillingTests))
+	}
+	funcs := map[string]bool{}
+	for i, m := range plan.Mutations {
+		funcs[m.Func] = true
+		if want := fmt.Sprintf("m%d", i+1); m.ID != want {
+			t.Errorf("ID = %s, want %s", m.ID, want)
+		}
+		if len(plan.KillingTests[i]) == 0 {
+			t.Errorf("KillingTests[%d] empty", i)
+		}
+		if i > 0 {
+			p := plan.Mutations[i-1]
+			if p.File > m.File || (p.File == m.File && p.Start >= m.Start) {
+				t.Errorf("mutations %d and %d not in (file, offset) order", i-1, i)
+			}
+		}
+	}
+	if len(funcs) != 3 {
+		t.Errorf("distinct funcs = %d, want 3: %v", len(funcs), funcs)
+	}
+	if n := diffLines(files, plan.Mutated); n != 3 {
+		t.Errorf("Mutated differs in %d lines, want 3", n)
+	}
+	if len(plan.BaselineTests) != 5 {
+		t.Errorf("BaselineTests = %v", plan.BaselineTests)
+	}
+	if plan.Stats.BuildErrors == 0 {
+		t.Errorf("BuildErrors = 0, want > 0 (string + in Capitalize); stats %+v", plan.Stats)
+	}
+	if plan.Stats.Killed == 0 || plan.Stats.Candidates < plan.Stats.Killed+plan.Stats.BuildErrors {
+		t.Errorf("inconsistent stats %+v", plan.Stats)
+	}
+
+	// Each mutation alone: no panic, and exactly KillingTests[i] fail.
+	for i, m := range plan.Mutations {
+		v := runWith(t, files, m)
+		if v.BuildError != "" {
+			t.Fatalf("m%d does not build: %s", i+1, v.BuildError)
+		}
+		for _, tr := range v.Tests {
+			if tr.Panicked {
+				t.Errorf("m%d: %s panicked", i+1, tr.Key())
+			}
+		}
+		f := failed(v)
+		for _, k := range plan.KillingTests[i] {
+			found := false
+			for _, x := range f {
+				found = found || x == k
+			}
+			if !found {
+				t.Errorf("m%d alone: %s did not fail (failed: %v)", i+1, k, f)
+			}
+		}
+		// Tests killing a different mutation must not fail here.
+		for j, ks := range plan.KillingTests {
+			if j == i {
+				continue
+			}
+			for _, k := range ks {
+				for _, x := range f {
+					if x == k {
+						t.Errorf("m%d alone made KillingTests[%d] test %s fail", i+1, j, k)
+					}
+				}
+			}
+		}
+	}
+	// All three together: every killing test fails.
+	all := failed(runWith(t, files, plan.Mutations...))
+	for i, ks := range plan.KillingTests {
+		for _, k := range ks {
+			ok := false
+			for _, x := range all {
+				ok = ok || x == k
+			}
+			if !ok {
+				t.Errorf("all mutations: KillingTests[%d] test %s passed", i, k)
+			}
+		}
+	}
+
+	// Batch directories are removed.
+	if ents, err := os.ReadDir(work); err != nil || len(ents) != 0 {
+		t.Errorf("workDir not clean: %v %v", ents, err)
+	}
+}
+
+func TestPrepareBaselineRed(t *testing.T) {
+	_, _, _, err := prepare(t, "testdata/red")
+	if !errors.Is(err, ErrBaselineRed) {
+		t.Fatalf("err = %v, want ErrBaselineRed", err)
+	}
+	if !strings.Contains(err.Error(), "TestDouble") {
+		t.Errorf("error does not list failing test: %v", err)
+	}
+}
+
+func TestPrepareNoTriple(t *testing.T) {
+	_, _, _, err := prepare(t, "testdata/onefunc")
+	if !errors.Is(err, ErrNoTriple) {
+		t.Fatalf("err = %v, want ErrNoTriple", err)
+	}
+}
+
+func TestPrepareCancelled(t *testing.T) {
+	files := loadDir(t, "../../examples/textkit")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	work := filepath.Join(t.TempDir(), "work")
+	_, err := Prepare(ctx, files, goSources(files), sandbox.NewLocal(runnerBin), work, DefaultOptions, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestPrepareProgress(t *testing.T) {
+	files := loadDir(t, "../../examples/textkit")
+	var stages []string
+	_, err := Prepare(context.Background(), files, goSources(files), sandbox.NewLocal(runnerBin),
+		filepath.Join(t.TempDir(), "work"), DefaultOptions, func(p Progress) { stages = append(stages, p.Stage) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stages) < 4 || stages[0] != "baseline" || stages[1] != "candidates" || stages[len(stages)-1] != "done" {
+		t.Errorf("stages = %v", stages)
+	}
+}
