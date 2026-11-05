@@ -345,3 +345,65 @@ func TestPrepareProgress(t *testing.T) {
 		t.Errorf("stages = %v", stages)
 	}
 }
+
+func TestIndependentMissingTest(t *testing.T) {
+	bit := map[string]int{"A": 0, "B": 1, "C": 2}
+	r := mk(func(mask int, test string) bool { return mask&(1<<bit[test]) != 0 })
+	// Mask 7 lost test A and gained a synthetic (init) failure.
+	r[7].Tests = []sandbox.TestResult{
+		{Pkg: ".", Name: "B", Status: sandbox.StatusFail},
+		{Pkg: ".", Name: "C", Status: sandbox.StatusFail},
+		{Pkg: ".", Name: "(init)", Status: sandbox.StatusFail},
+	}
+	if _, ok := Independent(r, keys(abc...)); ok {
+		t.Error("ok = true, want false")
+	}
+}
+
+// initRunner delegates to a real runner but replaces the result of the given
+// variants with a lone synthetic "(init)" failure.
+type initRunner struct {
+	sandbox.Runner
+	bad map[string]bool
+}
+
+func (f initRunner) Run(ctx context.Context, b sandbox.Batch) ([]sandbox.VariantResult, error) {
+	res, err := f.Runner.Run(ctx, b)
+	for i := range res {
+		if f.bad[res[i].ID] {
+			res[i].Tests = []sandbox.TestResult{{Pkg: "pkg", Name: "(init)", Status: sandbox.StatusFail}}
+		}
+	}
+	return res, err
+}
+
+func TestPrepareInitResultNotCandidate(t *testing.T) {
+	files := loadDir(t, "../../examples/textkit")
+	src := goSources(files)
+	all, err := mutate.Generate(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := map[string]bool{}
+	for _, m := range all {
+		if m.Func == "Max" {
+			bad[m.ID] = true
+		}
+	}
+	if len(bad) == 0 {
+		t.Fatal("no Max candidates")
+	}
+	r := initRunner{Runner: sandbox.NewLocal(runnerBin), bad: bad}
+	plan, err := Prepare(context.Background(), files, src, r, filepath.Join(t.TempDir(), "work"), DefaultOptions, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range plan.Mutations {
+		if m.Func == "Max" {
+			t.Errorf("mutation %+v from a variant with (init) result was selected", m)
+		}
+	}
+	if plan.Stats.BuildErrors < len(bad) {
+		t.Errorf("BuildErrors = %d, want >= %d", plan.Stats.BuildErrors, len(bad))
+	}
+}

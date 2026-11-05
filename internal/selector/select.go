@@ -113,7 +113,7 @@ func checkBaseline(ids []string, base map[string]sandbox.VariantResult) ([]strin
 // evaluate runs every candidate mutation on its own and keeps the ones that
 // make at least one test fail without a build error or timeout.
 func evaluate(ctx context.Context, files, goFiles map[string][]byte, r sandbox.Runner,
-	workDir string) ([]Candidate, map[string]sandbox.VariantResult, Stats, error) {
+	workDir string, baseKeys []string) ([]Candidate, map[string]sandbox.VariantResult, Stats, error) {
 	ms, err := mutate.Generate(goFiles)
 	if err != nil {
 		return nil, nil, Stats{}, err
@@ -140,7 +140,9 @@ func evaluate(ctx context.Context, files, goFiles map[string][]byte, r sandbox.R
 	kept := map[string]sandbox.VariantResult{}
 	for _, m := range ms {
 		v := res[m.ID]
-		if v.BuildError != "" {
+		// A different test set (e.g. a synthetic "(init)" result) means the
+		// variant could not run as a normal one.
+		if v.BuildError != "" || !slices.Equal(v.Keys(), baseKeys) {
 			stats.BuildErrors++
 			continue
 		}
@@ -234,7 +236,7 @@ func Prepare(ctx context.Context, files map[string][]byte, goFiles map[string][]
 	baseline := base[ids[0]]
 
 	// 2. Single-mutation candidates.
-	cands, candRes, stats, err := evaluate(ctx, files, goFiles, r, workDir)
+	cands, candRes, stats, err := evaluate(ctx, files, goFiles, r, workDir, baseKeys)
 	if err != nil {
 		return nil, err
 	}

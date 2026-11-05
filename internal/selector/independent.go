@@ -45,6 +45,15 @@ func Independent(r [8]sandbox.VariantResult, tests []string) (killing [3][]strin
 		if v.BuildError != "" {
 			return killing, false
 		}
+		have := make(map[string]bool, len(v.Tests))
+		for _, t := range v.Tests {
+			have[t.Key()] = true
+		}
+		for _, t := range tests {
+			if !have[t] {
+				return killing, false
+			}
+		}
 	}
 	for _, t := range tests {
 		for i := 0; i < 3; i++ {
