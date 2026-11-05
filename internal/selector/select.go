@@ -46,7 +46,7 @@ var (
 // runBatch writes the variants, runs them and removes the batch directory.
 // Results are returned keyed by variant ID.
 func runBatch(ctx context.Context, r sandbox.Runner, workDir, name string,
-	ids []string, variants map[string]map[string][]byte) (map[string]sandbox.VariantResult, error) {
+	ids []string, variant func(int) (map[string][]byte, error)) (map[string]sandbox.VariantResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -61,8 +61,15 @@ func runBatch(ctx context.Context, r sandbox.Runner, workDir, name string,
 	if err := os.Chmod(dir, 0o755); err != nil {
 		return nil, err
 	}
-	for _, id := range ids {
-		if err := sandbox.WriteVariant(dir, id, variants[id]); err != nil {
+	for i, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		files, err := variant(i)
+		if err != nil {
+			return nil, err
+		}
+		if err := sandbox.WriteVariant(dir, id, files); err != nil {
 			return nil, err
 		}
 	}
@@ -110,63 +117,99 @@ func checkBaseline(ids []string, base map[string]sandbox.VariantResult) ([]strin
 	return keys, nil
 }
 
-// evaluate runs every candidate mutation on its own and keeps the ones that
-// make at least one test fail without a build error or timeout.
+const (
+	maxCandidateBatchVariants = 16
+	maxCandidateBatchBytes    = 32 << 20
+)
+
+// evaluate runs every candidate on its own and retains the highest-scoring
+// mutations that fail a test without a build error or timeout.
 func evaluate(ctx context.Context, files, goFiles map[string][]byte, r sandbox.Runner,
-	workDir string, baseKeys []string) ([]Candidate, map[string]sandbox.VariantResult, Stats, error) {
+	workDir string, baseKeys []string, onProgress func(Progress)) ([]Candidate, map[string]sandbox.VariantResult, Stats, error) {
 	ms, err := mutate.Generate(goFiles)
 	if err != nil {
 		return nil, nil, Stats{}, err
 	}
 	stats := Stats{Candidates: len(ms)}
 	if len(ms) == 0 {
+		onProgress(Progress{"candidates", 1, 1})
 		return nil, nil, stats, nil
 	}
-	ids := make([]string, 0, len(ms))
-	vars := make(map[string]map[string][]byte, len(ms))
-	for _, m := range ms {
-		mf, err := mutate.Apply(files, []mutate.Mutation{m})
+	var projectBytes int64
+	for _, src := range files {
+		projectBytes += int64(len(src))
+	}
+	cands := make([]Candidate, 0, topCandidates)
+	kept := map[string]sandbox.VariantResult{}
+	for start := 0; start < len(ms); {
+		ids := make([]string, 0, maxCandidateBatchVariants)
+		var batchBytes int64
+		for _, m := range ms[start:min(start+maxCandidateBatchVariants, len(ms))] {
+			variantBytes := projectBytes + int64(len(m.Repl)-(m.End-m.Start))
+			if variantBytes > maxCandidateBatchBytes {
+				return nil, nil, stats, fmt.Errorf("candidate %s exceeds %d-byte batch limit", m.ID, maxCandidateBatchBytes)
+			}
+			if batchBytes+variantBytes > maxCandidateBatchBytes {
+				break
+			}
+			ids = append(ids, m.ID)
+			batchBytes += variantBytes
+		}
+		batch := ms[start : start+len(ids)]
+		res, err := runBatch(ctx, r, workDir, "cands", ids, func(i int) (map[string][]byte, error) {
+			return mutate.Apply(files, batch[i:i+1])
+		})
 		if err != nil {
 			return nil, nil, stats, err
 		}
-		ids = append(ids, m.ID)
-		vars[m.ID] = mf
-	}
-	res, err := runBatch(ctx, r, workDir, "cands", ids, vars)
-	if err != nil {
-		return nil, nil, stats, err
-	}
-	var cands []Candidate
-	kept := map[string]sandbox.VariantResult{}
-	for _, m := range ms {
-		v := res[m.ID]
-		// A different test set (e.g. a synthetic "(init)" result) means the
-		// variant could not run as a normal one.
-		if v.BuildError != "" || !slices.Equal(v.Keys(), baseKeys) {
-			stats.BuildErrors++
-			continue
-		}
-		c := Candidate{M: m}
-		for _, t := range v.Tests {
-			if t.Status == sandbox.StatusPass {
-				continue
+		for _, m := range batch {
+			v := res[m.ID]
+			if c, ok := evaluateCandidate(m, v, baseKeys, &stats); ok {
+				cands = append(cands, c)
+				kept[m.ID] = v
 			}
-			c.Failing = append(c.Failing, t.Key())
-			c.Timeout = c.Timeout || t.Status == sandbox.StatusTimeout
-			c.Panicked = c.Panicked || t.Panicked
 		}
-		switch {
-		case c.Timeout:
-		case len(c.Failing) == 0:
-			stats.Survived++
-		default:
-			sort.Strings(c.Failing)
-			stats.Killed++
-			cands = append(cands, c)
-			kept[m.ID] = v
+		sort.SliceStable(cands, func(i, j int) bool { return Score(cands[i]) > Score(cands[j]) })
+		if len(cands) > topCandidates {
+			for _, c := range cands[topCandidates:] {
+				delete(kept, c.M.ID)
+			}
+			clear(cands[topCandidates:])
+			cands = cands[:topCandidates]
 		}
+		start += len(batch)
+		onProgress(Progress{"candidates", start, len(ms)})
 	}
 	return cands, kept, stats, nil
+}
+
+func evaluateCandidate(m mutate.Mutation, v sandbox.VariantResult, baseKeys []string, stats *Stats) (Candidate, bool) {
+	// A different test set (e.g. a synthetic "(init)" result) means the
+	// variant could not run as a normal one.
+	if v.BuildError != "" || !slices.Equal(v.Keys(), baseKeys) {
+		stats.BuildErrors++
+		return Candidate{}, false
+	}
+	c := Candidate{M: m}
+	for _, t := range v.Tests {
+		if t.Status == sandbox.StatusPass {
+			continue
+		}
+		c.Failing = append(c.Failing, t.Key())
+		c.Timeout = c.Timeout || t.Status == sandbox.StatusTimeout
+		c.Panicked = c.Panicked || t.Panicked
+	}
+	switch {
+	case c.Timeout:
+		return Candidate{}, false
+	case len(c.Failing) == 0:
+		stats.Survived++
+		return Candidate{}, false
+	default:
+		sort.Strings(c.Failing)
+		stats.Killed++
+		return c, true
+	}
 }
 
 // triple is one triple under verification, sorted by (file, offset) so bit i
@@ -219,12 +262,12 @@ func Prepare(ctx context.Context, files map[string][]byte, goFiles map[string][]
 
 	// 1. Baseline.
 	ids := make([]string, opt.BaselineRuns)
-	vars := map[string]map[string][]byte{}
 	for i := range ids {
 		ids[i] = "b" + strconv.Itoa(i+1)
-		vars[ids[i]] = files
 	}
-	base, err := runBatch(ctx, r, workDir, "baseline", ids, vars)
+	base, err := runBatch(ctx, r, workDir, "baseline", ids, func(int) (map[string][]byte, error) {
+		return files, nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -236,14 +279,11 @@ func Prepare(ctx context.Context, files map[string][]byte, goFiles map[string][]
 	baseline := base[ids[0]]
 
 	// 2. Single-mutation candidates.
-	cands, candRes, stats, err := evaluate(ctx, files, goFiles, r, workDir, baseKeys)
+	cands, candRes, stats, err := evaluate(ctx, files, goFiles, r, workDir, baseKeys, onProgress)
 	if err != nil {
 		return nil, err
 	}
-	onProgress(Progress{"candidates", 1, 1})
-
 	// 3. Rank and enumerate triples.
-	sort.SliceStable(cands, func(i, j int) bool { return Score(cands[i]) > Score(cands[j]) })
 	ranked := rankTriples(cands)
 	if opt.MaxTriples > 0 && len(ranked) > opt.MaxTriples {
 		ranked = ranked[:opt.MaxTriples]
@@ -254,7 +294,7 @@ func Prepare(ctx context.Context, files map[string][]byte, goFiles map[string][]
 		end := min(start+opt.TriplesPerBatch, len(ranked))
 		jobs := map[int]triple{}
 		ids = ids[:0]
-		vars = map[string]map[string][]byte{}
+		vars := map[string]map[string][]byte{}
 		for k := start; k < end; k++ {
 			stats.TriplesChecked++
 			ix := ranked[k]
@@ -283,7 +323,9 @@ func Prepare(ctx context.Context, files map[string][]byte, goFiles map[string][]
 			}
 		}
 		if len(jobs) > 0 {
-			res, err := runBatch(ctx, r, workDir, "triples", ids, vars)
+			res, err := runBatch(ctx, r, workDir, "triples", ids, func(i int) (map[string][]byte, error) {
+				return vars[ids[i]], nil
+			})
 			if err != nil {
 				return nil, err
 			}

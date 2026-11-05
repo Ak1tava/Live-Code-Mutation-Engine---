@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -117,6 +118,129 @@ func TestScoreOrder(t *testing.T) {
 	}
 	if m := Score(c(mutate.Boundary, "main", false)); m >= b {
 		t.Errorf("main boundary %d >= non-main boundary %d", m, b)
+	}
+}
+
+type recordingCandidateRunner struct {
+	t       *testing.T
+	batches []int
+	seen    []string
+	fail    bool
+}
+
+func (r *recordingCandidateRunner) GoVersion(context.Context) (string, error) {
+	return "", nil
+}
+
+func (r *recordingCandidateRunner) Run(_ context.Context, b sandbox.Batch) ([]sandbox.VariantResult, error) {
+	r.batches = append(r.batches, len(b.IDs))
+	r.seen = append(r.seen, b.IDs...)
+	var bytes int64
+	err := filepath.WalkDir(b.Dir, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		bytes += info.Size()
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(b.IDs) > 16 || bytes > 32<<20 {
+		r.t.Errorf("candidate batch contains %d variants and %d bytes", len(b.IDs), bytes)
+	}
+	out := make([]sandbox.VariantResult, 0, len(b.IDs))
+	status := sandbox.StatusPass
+	if r.fail {
+		status = sandbox.StatusFail
+	}
+	for _, id := range b.IDs {
+		out = append(out, sandbox.VariantResult{ID: id, Tests: []sandbox.TestResult{
+			{Pkg: ".", Name: "A", Status: status},
+		}})
+	}
+	return out, nil
+}
+
+func TestEvaluateBoundsCandidateBatches(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		candidates  int
+		paddingMiB  int
+		wantBatches []int
+	}{
+		{"variant count", 18, 0, []int{16, 2}},
+		{"staged bytes", 2, 17, []int{1, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := "package p\nfunc f() {\n" + strings.Repeat("_ = 1\n", tc.candidates) + "}\n"
+			goFiles := map[string][]byte{"p.go": []byte(source)}
+			files := map[string][]byte{"p.go": goFiles["p.go"]}
+			// Share the padding in memory, but account for every file staged
+			// in each variant. The fake runner never compiles the fixture.
+			padding := make([]byte, 1<<20)
+			for i := 0; i < tc.paddingMiB; i++ {
+				files[fmt.Sprintf("padding-%d", i)] = padding
+			}
+			r := &recordingCandidateRunner{t: t}
+			work := t.TempDir()
+			var progress []Progress
+			cands, _, stats, err := evaluate(context.Background(), files, goFiles, r, work, keys("A"), func(p Progress) {
+				progress = append(progress, p)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(cands) != 0 || stats.Candidates != tc.candidates || stats.Survived != tc.candidates {
+				t.Errorf("candidates=%v stats=%+v", cands, stats)
+			}
+			if !slices.Equal(r.batches, tc.wantBatches) {
+				t.Errorf("batch sizes = %v, want %v", r.batches, tc.wantBatches)
+			}
+			var wantProgress []Progress
+			done := 0
+			for _, count := range tc.wantBatches {
+				done += count
+				wantProgress = append(wantProgress, Progress{"candidates", done, tc.candidates})
+			}
+			if !slices.Equal(progress, wantProgress) {
+				t.Errorf("progress = %v, want %v", progress, wantProgress)
+			}
+			for i, id := range r.seen {
+				if want := fmt.Sprintf("c%d", i+1); id != want {
+					t.Errorf("candidate[%d] = %s, want %s", i, id, want)
+				}
+			}
+			if entries, err := os.ReadDir(work); err != nil || len(entries) != 0 {
+				t.Errorf("work directory contains %v, err=%v", entries, err)
+			}
+		})
+	}
+}
+
+func TestEvaluateRetainsStableTopCandidatesAcrossBatches(t *testing.T) {
+	const source = "package p\nfunc f(n int) int {\n" +
+		"_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n" +
+		"_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n" +
+		"return n + 1\n}\n"
+	files := map[string][]byte{"p.go": []byte(source)}
+	r := &recordingCandidateRunner{t: t, fail: true}
+	cands, kept, stats, err := evaluate(context.Background(), files, files, r, t.TempDir(), keys("A"), func(Progress) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 12 || len(kept) != 12 || stats.Killed != 18 {
+		t.Fatalf("candidates=%d kept=%d stats=%+v", len(cands), len(kept), stats)
+	}
+	want := []string{"c17", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11"}
+	for i, c := range cands {
+		if c.M.ID != want[i] || kept[c.M.ID].ID != c.M.ID {
+			t.Errorf("candidate[%d] = %s, want %s and matching result", i, c.M.ID, want[i])
+		}
 	}
 }
 

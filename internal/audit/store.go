@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -126,7 +127,10 @@ func (s *Session) clone() *Session {
 			c.Flags[i] = f
 		}
 	}
-	c.Runs = append(s.Runs[:0:0], s.Runs...)
+	c.Runs = slices.Clone(s.Runs)
+	for i := range c.Runs {
+		c.Runs[i].Result.Tests = slices.Clone(s.Runs[i].Result.Tests)
+	}
 	c.Events = append(s.Events[:0:0], s.Events...)
 	return &c
 }

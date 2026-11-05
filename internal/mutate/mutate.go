@@ -86,7 +86,8 @@ func generateFile(name string, src []byte) ([]Mutation, error) {
 	}
 	var ms []Mutation
 	add := func(fn string, pos token.Pos, length int, kind Kind, repl string) {
-		p := fset.Position(pos)
+		// The editor and report refer to the physical file, even with //line directives.
+		p := fset.PositionFor(pos, false)
 		ms = append(ms, Mutation{
 			File: name, Line: p.Line, Func: fn, Kind: kind,
 			Start: p.Offset, End: p.Offset + length,

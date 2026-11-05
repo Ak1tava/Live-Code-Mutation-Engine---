@@ -1,4 +1,4 @@
-.PHONY: image web build run test test-docker dev
+.PHONY: image web build run test test-docker dev demo
 
 GO_VERSION ?= 1.27.3
 
@@ -6,14 +6,14 @@ image:
 	docker build -f sandbox/Dockerfile --build-arg GO_VERSION=$(GO_VERSION) -t lcme-runner:latest .
 
 web:
-	cd web && npm install && npm run build
+	cd web && npm ci && npm run build && touch dist/.gitkeep
 
-build:
+build: web
 	go build -o bin/lcme ./cmd/server
 	go build -o bin/lcme-runner ./cmd/runner
 
 run:
-	set -a; [ -f .env ] && . ./.env; set +a; exec ./bin/lcme
+	./scripts/run.sh
 
 test:
 	go test ./...
@@ -21,5 +21,9 @@ test:
 test-docker:
 	LCME_DOCKER=1 go test ./internal/sandbox/...
 
-dev:
-	go run ./cmd/server & cd web && npx vite dev; wait
+dev: build
+	./scripts/dev.sh
+
+# Trusted fixture only. Keep Docker as the production default.
+demo: build
+	LCME_RUNNER=local LCME_ADDR=127.0.0.1:8080 LCME_PUBLIC_URL=http://127.0.0.1:8080 ./bin/lcme

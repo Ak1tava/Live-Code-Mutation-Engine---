@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,6 +50,7 @@ var (
 	ErrTooBig          = errors.New("audit: file is too big")
 	ErrUnknownFlag     = errors.New("audit: unknown flag")
 	ErrUnknownMutation = errors.New("audit: unknown mutation")
+	ErrInvalidEvent    = errors.New("audit: invalid behavioural event")
 )
 
 // Flag is a place in the code the student marked as suspicious.
@@ -90,6 +92,7 @@ type Session struct {
 	Mutated                        map[string][]byte // the task as issued (left side of the diff)
 	CreatedAt, StartedAt           time.Time
 	Deadline, FinishedAt           time.Time
+	FinishRequestedAt              time.Time // freezes student input before the final run
 	Flags                          []Flag
 	Runs                           []Run
 	Events                         []Event
@@ -166,8 +169,11 @@ func (s *Session) checkRunning(now time.Time) error {
 	if s.State != StateRunning {
 		return ErrBadState
 	}
-	if now.After(s.Deadline) {
+	if s.Expired(now) {
 		return ErrExpired
+	}
+	if !s.FinishRequestedAt.IsZero() {
+		return ErrBadState
 	}
 	return nil
 }
@@ -230,20 +236,27 @@ func (s *Session) ReviewFlag(flagID, mutationID string, accepted bool) error {
 	return nil
 }
 
-// AddEvent appends a behavioural event. Validation is added later.
+// AddEvent appends a valid behavioural event while student input is allowed.
 func (s *Session) AddEvent(kind string, size int, now time.Time) error {
+	if s.checkRunning(now) != nil {
+		return nil
+	}
+	if size < 0 || (kind != "hidden" && kind != "visible" && kind != "paste") {
+		return ErrInvalidEvent
+	}
 	s.Events = append(s.Events, Event{At: now, Kind: kind, Size: size})
 	return nil
 }
 
 // AddRun appends a test run.
 func (s *Session) AddRun(r sandbox.VariantResult, final bool, now time.Time) {
+	r.Tests = slices.Clone(r.Tests)
 	s.Runs = append(s.Runs, Run{At: now, Final: final, Result: r})
 }
 
-// Expired reports whether a running session is past its deadline.
+// Expired reports whether a running session has reached its deadline.
 func (s *Session) Expired(now time.Time) bool {
-	return s.State == StateRunning && now.After(s.Deadline)
+	return s.State == StateRunning && !now.Before(s.Deadline)
 }
 
 // Finish ends a running session; later calls keep the first FinishedAt.

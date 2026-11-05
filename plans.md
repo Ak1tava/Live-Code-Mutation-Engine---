@@ -13,9 +13,43 @@
 | ID | Задача | Статус | Исполнитель / ветка | Обновлено (UTC+5) | Проверка / следующий шаг |
 |---|---|---|---|---|---|
 | DOCS-1 | Общие инструкции Claude Code и Codex, субагенты и статусы плана | завершена | Codex / `codex/shared-agent-instructions` | 2026-11-05 13:44 | Context7 и официальные источники сверены; импорт, сохранность исходного плана и diff проверены; независимое ревью без замечаний |
+| AUDIT-1 | Проверка текущего состояния проекта | завершена | Codex / `codex/shared-agent-instructions` | 2026-11-05 14:12 | Снимок аудита на 14:12: make test, textkit, go vet и diff прошли; ошибка Store воспроизведена; MVP не собирается без T8–T12, Docker не проверен; далее исправления и T8 |
+| T0 | Окружение | не сверено | Codex (сверка) / `codex/shared-agent-instructions` | 2026-11-05 14:07 | На этом Mac Go 1.27.3 найден в ~/.local/go/bin, Node 22.20.0; Docker/ngrok не найдены; целевое WSL-окружение не проверялось |
+| T1 | Каркас и textkit | завершена | Codex / `codex/shared-agent-instructions` | 2026-11-05 14:43 | make build с чистым npm ci прошёл; typecheck, 10 UI-тестов, независимое ревью и браузерный textkit E2E прошли. Исправление 2→3 зелёных, отметка/принятие, сохранение дедлайна после reload и отчёт проверены; pageerror отсутствуют |
+| T2 | Мутации | завершена | Codex / `codex/shared-agent-instructions` | 2026-11-05 14:33 | Исправления проверены независимым ревью без замечаний; make test и go vet прошли, audit дополнительно прошёл -race. Регрессии: //line, ограничение пакетов кандидатов, владение результатами и откат, граница дедлайна и сохранение запроса завершения |
+| T3 | Протокол, раннер и Local | требует проверки | Codex (сверка) / `codex/shared-agent-instructions` | 2026-11-05 14:07 | Локальные тесты прошли; до публичного запуска проверить достоверность pass: сейчас основан на коде выхода процесса, отдельного подтверждения выполнения теста нет |
+| T4 | Отбор тройки | завершена | Codex / `codex/shared-agent-instructions` | 2026-11-05 14:33 | Исправления проверены независимым ревью без замечаний; make test и go vet прошли, audit дополнительно прошёл -race. Регрессии: //line, ограничение пакетов кандидатов, владение результатами и откат, граница дедлайна и сохранение запроса завершения |
+| T5 | Docker-песочница | требует проверки | Codex (сверка) / `codex/shared-agent-instructions` | 2026-11-05 14:07 | Реализация и fake-Docker тесты есть; make test-docker, сборка образа, изоляция и замер <5 с не проверены: Docker недоступен |
+| T6 | Импорт | требует проверки | Codex (сверка) / `codex/shared-agent-instructions` | 2026-11-05 14:07 | Тесты прошли; перед публикацией ограничить clone по ресурсам и доступ к внутренним HTTPS-адресам; текущие лимиты дерева действуют после clone |
+| T7 | Сессия, отчёт, хранилище | завершена | Codex / `codex/shared-agent-instructions` | 2026-11-05 14:33 | Исправления проверены независимым ревью без замечаний; make test и go vet прошли, audit дополнительно прошёл -race. Регрессии: //line, ограничение пакетов кандидатов, владение результатами и откат, граница дедлайна и сохранение запроса завершения |
+| T8 | HTTP, WebSocket и сервер | требует проверки | Codex / `codex/shared-agent-instructions` | 2026-11-05 14:43 | Локальная реализация и проверки завершены: make test, go vet, race API/audit/hints/config, make build, браузерный E2E textkit и независимое ревью прошли. Не выполнены Docker и публичный сценарий; T13 реальный импорт/мобильная сеть и T15 публичная проверка остаются открыты |
+| T9 | Каркас фронтенда | завершена | Codex / `codex/shared-agent-instructions` | 2026-11-05 14:43 | make build с чистым npm ci прошёл; typecheck, 10 UI-тестов, независимое ревью и браузерный textkit E2E прошли. Исправление 2→3 зелёных, отметка/принятие, сохранение дедлайна после reload и отчёт проверены; pageerror отсутствуют |
+| T10 | Экран студента | завершена | Codex / `codex/shared-agent-instructions` | 2026-11-05 14:43 | make build с чистым npm ci прошёл; typecheck, 10 UI-тестов, независимое ревью и браузерный textkit E2E прошли. Исправление 2→3 зелёных, отметка/принятие, сохранение дедлайна после reload и отчёт проверены; pageerror отсутствуют |
+| T11 | Экран аудитора | завершена | Codex / `codex/shared-agent-instructions` | 2026-11-05 14:43 | make build с чистым npm ci прошёл; typecheck, 10 UI-тестов, независимое ревью и браузерный textkit E2E прошли. Исправление 2→3 зелёных, отметка/принятие, сохранение дедлайна после reload и отчёт проверены; pageerror отсутствуют |
+| T12 | Отчёт UI и сборка | завершена | Codex / `codex/shared-agent-instructions` | 2026-11-05 14:43 | make build с чистым npm ci прошёл; typecheck, 10 UI-тестов, независимое ревью и браузерный textkit E2E прошли. Исправление 2→3 зелёных, отметка/принятие, сохранение дедлайна после reload и отчёт проверены; pageerror отсутствуют |
+| T13 | Публичный запуск и сквозной прогон | требует проверки | Codex / `codex/shared-agent-instructions` | 2026-11-05 14:43 | Локальная реализация и проверки завершены: make test, go vet, race API/audit/hints/config, make build, браузерный E2E textkit и независимое ревью прошли. Не выполнены Docker и публичный сценарий; T13 реальный импорт/мобильная сеть и T15 публичная проверка остаются открыты |
+| T14 | Подсказки аудитору | требует проверки | Codex / `codex/shared-agent-instructions` | 2026-11-05 14:33 | Реализация и локальные HTTP-тесты прошли независимое ревью, make test и -race; интегрировано с API. Ручная проверка с настоящим ключом OpenRouter не выполнялась |
+| T15 | Сигналы и QR | требует проверки | Codex / `codex/shared-agent-instructions` | 2026-11-05 14:43 | Локальная реализация и проверки завершены: make test, go vet, race API/audit/hints/config, make build, браузерный E2E textkit и независимое ревью прошли. Не выполнены Docker и публичный сценарий; T13 реальный импорт/мобильная сеть и T15 публичная проверка остаются открыты |
+| T16 | Живая проверка | не сверено | Codex (сверка) / `codex/shared-agent-instructions` | 2026-11-05 14:07 | Локальное демо собрано и проверено автоматически; живой прогон человеком не проводился |
+| T17 | Презентация и видео | не сверено | Codex (сверка) / `codex/shared-agent-instructions` | 2026-11-05 14:07 | Артефактов в checkout нет; внешние материалы и репетиции не проверялись |
+| T18 | Форма сдачи | не сверено | Codex (сверка) / `codex/shared-agent-instructions` | 2026-11-05 14:07 | Внешняя форма и факт сдачи не проверялись |
 
 ### Журнал изменений статуса
 
+- 2026-11-05 14:45 (UTC+5) — передача non-Docker этапа: изменены ядро `internal/mutate`, `selector`, `audit`; добавлены API/WS, `cmd/server`, hints/OpenRouter, весь React/Vite/Monaco интерфейс `web`, scripts и цели Makefile; обновлены README/.env.example/зависимости. Проверки: `make test`, textkit, `go vet ./...`, `go test -race ./internal/api ./internal/audit ./internal/hints ./cmd/server`, `make build` с чистым `npm ci`, typecheck, 10 UI-тестов, shell syntax, diff-check — PASS. Независимые ревью ядра, API и UI пройдены. Реальный браузер Chromium: подготовка textkit, старт, 2→3 зелёных после одной правки с немедленным Run, отметка/принятие, reload без смены deadline, финальный отчёт и отсутствие pageerror — PASS. Исправлены найденные ревью потеря ACK-версии при обрыве и источник подсказки, а также найденное браузером освобождение моделей DiffEditor. Проверка использовала временные data/work; пользовательские репозитории не запускались. Дальше: замечания T3/T6 до публичного доступа, Docker T5/T8/T13, реальный ключ T14, публичный сценарий T15 и пользовательский T16. Внешние публикации и отправка формы не выполнялись. Vite предупреждает о размере отложенного Monaco-модуля (~844 КиБ gzip); сборка успешна. Подготовлен локальный коммит, без push/merge.
+- 2026-11-05 14:43 (UTC+5) — T8,T13,T15 требует проверки: Локальная реализация и проверки завершены: make test, go vet, race API/audit/hints/config, make build, браузерный E2E textkit и независимое ревью прошли. Не выполнены Docker и публичный сценарий; T13 реальный импорт/мобильная сеть и T15 публичная проверка остаются открыты. Исполнитель — Codex, ветка `codex/shared-agent-instructions`.
+- 2026-11-05 14:43 (UTC+5) — T1,T9,T10,T11,T12 завершена: make build с чистым npm ci прошёл; typecheck, 10 UI-тестов, независимое ревью и браузерный textkit E2E прошли. Исправление 2→3 зелёных, отметка/принятие, сохранение дедлайна после reload и отчёт проверены; pageerror отсутствуют. Исполнитель — Codex, ветка `codex/shared-agent-instructions`.
+- 2026-11-05 14:35 (UTC+5) — T9,T10,T11,T12,T15 требует проверки: Интерфейс готов, typecheck/build и 8 frontend-тестов прошли у исполнителя; проверяется штатный npm ci, локальный браузерный сценарий и независимое ревью. Исполнитель — Codex, ветка `codex/shared-agent-instructions`.
+- 2026-11-05 14:33 (UTC+5) — T14 требует проверки: Реализация и локальные HTTP-тесты прошли независимое ревью, make test и -race; интегрировано с API. Ручная проверка с настоящим ключом OpenRouter не выполнялась. Исполнитель — Codex, ветка `codex/shared-agent-instructions`.
+- 2026-11-05 14:33 (UTC+5) — T2,T4,T7 завершена: Исправления проверены независимым ревью без замечаний; make test и go vet прошли, audit дополнительно прошёл -race. Регрессии: //line, ограничение пакетов кандидатов, владение результатами и откат, граница дедлайна и сохранение запроса завершения. Исполнитель — Codex, ветка `codex/shared-agent-instructions`.
+- 2026-11-05 14:30 (UTC+5) — T8 требует проверки: API, WebSocket, фоновые прогоны и восстановление завершения реализованы; целевые race-тесты прошли, идут независимое ревью и интеграция с интерфейсом. Docker-критерий остаётся открытым. Исполнитель — Codex, ветка `codex/shared-agent-instructions`.
+- 2026-11-05 14:27 (UTC+5) — T2,T4,T7 требует проверки: Исправления ядра готовы: физические строки, глубокая копия результатов, точный дедлайн, заморозка завершения; регрессионные проверки прошли, полный прогон пакетов и независимое ревью ещё выполняются. Решение T4: вместо единого Batch кандидатов максимум 16 вариантов и 32 МиБ за пакет с накопительным прогрессом. Исполнитель — Codex, ветка `codex/shared-agent-instructions`.
+- 2026-11-05 14:26 (UTC+5) — T13 в работе: Добавлены scripts/run.sh, scripts/dev.sh и make demo для доверенной локальной проверки; публичный запуск и Docker остаются за пределами доступной проверки. Исполнитель — Codex, ветка `codex/shared-agent-instructions`.
+- 2026-11-05 14:25 (UTC+5) — T14 требует проверки: добавлены `internal/hints/hints_test.go`, `openrouter.go`, расширен `hints.go`. Тесты шаблонов всех видов, запроса, некорректного/неполного ответа, таймаута и ±3 строк прошли (`go test -timeout 30s ./internal/hints`). Формат API сверен Context7; реальные LLM-запросы не выполнялись. Следующий шаг — интеграция с T8 и ревью.
+- 2026-11-05 14:19 (UTC+5) — начата/возобновлена работа над T2, T4, T7–T12, T14–T15: Codex выполняет существующий план без Docker. Разделение: агент ядра — mutate/selector/audit, агент API — internal/api и go.mod/go.sum, агент UI — web; ведущий — hints, cmd/server, Makefile и интеграция. Ruling: работаем в текущей feature-ветке с непересекающимися файлами и сохраняем аудит; новый worktree не требуется. Local разрешён только для встроенного textkit, пользовательский импорт через local запрещён. Ruling: студенческий отчёт содержит только сводку без мутаций/исходного текста (Global Constraints выше общего ReportView); T5 и Docker-критерии T8/T13 остаются открыты.
+- 2026-11-05 14:12 (UTC+5) — AUDIT-1 завершена: ведущий независимо воспроизвёл ошибку отката Store временным Go overlay-тестом `TestStateAuditRollback`: после отклонённого Update результат в памяти `fail`, на диске `pass`. Штатный `make test`, отдельный textkit и `go vet ./...` успешны; `make build` неуспешен из-за отсутствующего `cmd/server`; Docker и сквозной UI/публичный сценарий не проверены. Изменён только `plans.md`; исходные требования, 19 Task и все чекбоксы сохранены (проверено сравнением с HEAD), `git diff --check` успешен. Следующие действия: исправить выявленные дефекты, подтвердить T5 в Docker, реализовать T8 и T9–T12, затем выполнить T13. Коммит не создавался.
+- 2026-11-05 14:07 (UTC+5) — AUDIT-1 требует проверки: завершены независимые read-only ревью T2–T5 и T6–T8/T14. Сверены строки T0–T18 без изменения исходных требований и чекбоксов. `make test` прошёл (selector 101,510 с), `(cd examples/textkit && go test ./...)` и `go vet ./...` прошли с Go 1.27.3 из `~/.local/go/bin`, временным GOCACHE и отключённой загрузкой модулей. `make build` завершился ошибкой: нет `cmd/server`. Docker-тесты не запускались: Docker не найден. Наблюдения ревью: неполная копия результатов прогонов в `internal/audit/store.go:129`; полный проект на каждого кандидата в `internal/selector/select.go:125`; лимиты импорта после clone и отсутствие ограничения внутренних HTTPS-адресов в `internal/project/import.go`; логические номера строк //line в `internal/mutate/mutate.go:89`. Проверка достоверности pass в раннере требует отдельного теста; воспроизведение обхода не выполнялось. Осталось независимо подтвердить Store и проверить diff; код приложения не изменён.
+- 2026-11-05 14:02 (UTC+5) — начата работа над AUDIT-1: исполнитель — Codex, ветка `codex/shared-agent-instructions`. Исходное рабочее дерево чистое, HEAD `628d034`. Проверяется текущее состояние без изменений кода; `plans.md` ведёт только ведущий агент. Go и Docker не найдены в PATH; следующий шаг — проверить доступные установки и независимо сверить реализацию с требованиями.
 - 2026-11-05 13:39 (UTC+5) — DOCS-1: начата работа над общими инструкциями и учётом статусов; исполнитель — Codex, ветка `codex/shared-agent-instructions`.
 - 2026-11-05 13:42 (UTC+5) — DOCS-1 требует проверки: созданы `AGENTS.md` и `CLAUDE.md`, обновлён блок статусов в `plans.md`. Загрузка инструкций сверена через Context7 и официальную документацию Codex/Claude Code; `git diff --check` пройден. Осталось проверить сохранность требований и чекбоксов плана, ссылки и независимое ревью.
 - 2026-11-05 13:44 (UTC+5) — DOCS-1 завершена: изменены только `AGENTS.md`, `CLAUDE.md` и `plans.md`. `git diff --check` и проверка структуры Python пройдены: исходный план от «Цель» до конца сохранён, все 19 задач на месте, импорт точный, размер `AGENTS.md` меньше 32 КиБ, локальные пути существуют. Независимое ревью — без замечаний. Тесты приложения не запускались: изменена только документация. Изменения локальные; для другого клона их нужно передать через Git, затем открыть новую сессию агента.
@@ -146,20 +180,20 @@ web/src/components/{Timer,TestResults,FileTree,ReportView,MutationCard}.tsx
 **Interfaces:**
 - Produces: демо-проект `examples/textkit` с 5 функциями и 5 тестами. На нём держатся тесты Task 3, 4, 6, 8.
 
-- [ ] **Step 1:** `examples/textkit/textkit.go` — пакет `textkit`, только `strings` из stdlib:
+- [x] **Step 1:** `examples/textkit/textkit.go` — пакет `textkit`, только `strings` из stdlib:
   - `Max(nums []int) int` — `m := nums[0]`, цикл `for i := 1; i < len(nums); i++`, `if nums[i] > m`.
   - `IsPrime(n int) bool` — `if n < 2 { return false }`, цикл `for i := 2; i*i <= n; i++`, `if n%i == 0`.
   - `Capitalize(s string) string` — `strings.Fields`, `if len(w) > 0`, `strings.ToUpper(w[:1]) + strings.ToLower(w[1:])`, `strings.Join(words, " ")`.
   - `AtoiBase(s, base string) int` — `if len(base) < 2 { return 0 }`, `idx := strings.IndexRune(base, r)`, `if idx == -1 { return 0 }`, `res = res*len(base) + idx`.
   - `WindowSums(nums []int, k int) []int` — `if k <= 0 || k > len(nums) { return nil }`, скользящая сумма: `if i >= k { sum -= nums[i-k] }`, `if i >= k-1 { out = append(out, sum) }`.
-- [ ] **Step 2:** `examples/textkit/textkit_test.go` — по одной табличной функции `TestMax`, `TestIsPrime`, `TestCapitalize`, `TestAtoiBase`, `TestWindowSums` с `t.Errorf` (не `Fatal`). Обязательные случаи:
+- [x] **Step 2:** `examples/textkit/textkit_test.go` — по одной табличной функции `TestMax`, `TestIsPrime`, `TestCapitalize`, `TestAtoiBase`, `TestWindowSums` с `t.Errorf` (не `Fatal`). Обязательные случаи:
   - `Max([]int{1})=1`, `{3,9,2}=9`, `{-5,-2,-9}=-2`, `{4,4,1}=4`, `{1,2,3,10}=10`;
   - `IsPrime`: −7, 0, 1, 4, 9, 25 → false; 2, 3, 13, 97 → true;
   - `Capitalize`: `"hello world"→"Hello World"`, `"gO pRO"→"Go Pro"`, `"a"→"A"`, `""→""`;
   - `AtoiBase`: `("101","01")=5`, `("ff","0123456789abcdef")=255`, `("z","01")=0`, `("1","0")=0`, `("","01")=0`;
   - `WindowSums`: `([1,2,3,4],2)=[3,5,7]`, `([5],1)=[5]`, `([1,2],3)=nil`, `([1,2,3],0)=nil`, `([1,2,3],3)=[6]`.
-- [ ] **Step 3:** Run: `cd examples/textkit && go test ./...` → `ok`.
-- [ ] **Step 4:** Корневой `go.mod`: `module lcme`, `go 1.24`. `Makefile` с целями из README (`image`, `web`, `build`, `run`, `test`, `test-docker`, `dev`). Цель `build` собирает `bin/lcme` и `bin/lcme-runner`. `.env.example` со всеми переменными из таблицы в README.
+- [x] **Step 3:** Run: `cd examples/textkit && go test ./...` → `ok`.
+- [x] **Step 4:** Корневой `go.mod`: `module lcme`, `go 1.24`. `Makefile` с целями из README (`image`, `web`, `build`, `run`, `test`, `test-docker`, `dev`). Цель `build` собирает `bin/lcme` и `bin/lcme-runner`. `.env.example` со всеми переменными из таблицы в README.
 - [ ] **Step 5:** Run: `make test` → `go: warning: "./..." matched no packages` (пакетов ещё нет; `examples/textkit` — отдельный модуль и в `./...` корня не входит, так и задумано).
 - [ ] **Step 6:** Commit: `git add -A && git commit -m "chore: каркас репозитория и демо-проект textkit"`.
 
@@ -193,7 +227,7 @@ web/src/components/{Timer,TestResults,FileTree,ReportView,MutationCard}.tsx
   var ErrOverlap = errors.New("mutations overlap")
   ```
 
-- [ ] **Step 1: Тесты**
+- [x] **Step 1: Тесты**
 
 ```go
 const src = "package a\n\nfunc F(n int) bool {\n\tfor i := 0; i < n; i++ {\n\t\tif i == 3 && n > 1 {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n"
@@ -212,13 +246,13 @@ func TestGenerateSkipsBigConstants(t *testing.T)    // литерал 100 не �
 ```
 
 - [ ] **Step 2:** Run: `go test ./internal/mutate/...` → FAIL (`undefined: Generate`).
-- [ ] **Step 3:** Реализовать `Generate`. `go/parser.ParseFile` по каждому файлу в отсортированном порядке, обход `*ast.FuncDecl.Body` через `ast.Inspect`:
+- [x] **Step 3:** Реализовать `Generate`. `go/parser.ParseFile` по каждому файлу в отсортированном порядке, обход `*ast.FuncDecl.Body` через `ast.Inspect`:
   - `BinaryExpr`: `< ↔ <=`, `> ↔ >=` (boundary); `== ↔ !=` (negate); `&& ↔ ||` (logical); `+ ↔ -` (arith). Позиция — `OpPos`, длина — `len(Op.String())`.
   - `IncDecStmt`: `++ ↔ --`, позиция `TokPos`.
   - `BasicLit` `INT` со значением `< 100`: `v → v+1`.
 
   Смещение — `fset.Position(pos).Offset`. После сортировки по (файл, `Start`) присвоить `ID = "c" + номер`. Реализовать `Apply`: внутри файла заменять с конца к началу, пересечение диапазонов → `ErrOverlap`.
-- [ ] **Step 4:** Run: `go test ./internal/mutate/...` → PASS.
+- [x] **Step 4:** Run: `go test ./internal/mutate/...` → PASS.
 - [ ] **Step 5:** Commit: `feat(mutate): кандидаты через go/ast и замена по смещениям`.
 
 ### Task 3: Протокол песочницы, раннер и `Local` (`internal/sandbox`, `cmd/runner`)
@@ -318,7 +352,7 @@ func TestLocalOutputCapped(t *testing.T)    // тест печатает 1 МБ 
   ```
   `files` — все файлы проекта, `goFiles` — только не-тестовые `.go` (вход `mutate.Generate`).
 
-- [ ] **Step 1: Чистые тесты**
+- [x] **Step 1: Чистые тесты**
 
 ```go
 // mk(fails func(mask int, test string) bool) строит [8]VariantResult по тестам "A","B","C"
@@ -330,9 +364,9 @@ func TestScoreOrder(t *testing.T)            // boundary > arith > constant; bou
 ```
 
 - [ ] **Step 2:** Run: `go test ./internal/selector/ -run 'Independent|Score'` → FAIL.
-- [ ] **Step 3:** Реализовать `Independent`: `killing[i]` = тесты `t`, для которых при всех `mask` в 0..7 `r[mask].Passed(t) == (mask&(1<<i) == 0)`; `ok` = все три списка не пусты. Реализовать `Score`: вес вида boundary/negate/logical = 10, incdec/arith = 6, constant = 2; `Panicked` −8; `Func != "main"` +2.
+- [x] **Step 3:** Реализовать `Independent`: `killing[i]` = тесты `t`, для которых при всех `mask` в 0..7 `r[mask].Passed(t) == (mask&(1<<i) == 0)`; `ok` = все три списка не пусты. Реализовать `Score`: вес вида boundary/negate/logical = 10, incdec/arith = 6, constant = 2; `Panicked` −8; `Func != "main"` +2.
 - [ ] **Step 4:** Run → PASS.
-- [ ] **Step 5: Интеграционные тесты** (`Local` из Task 3 на `examples/textkit`):
+- [x] **Step 5: Интеграционные тесты** (`Local` из Task 3 на `examples/textkit`):
 
 ```go
 func TestPrepareTextkit(t *testing.T)       // len(Mutations)==3; Func у всех разные; каждый KillingTests[i] не пуст;
@@ -342,14 +376,14 @@ func TestPrepareBaselineRed(t *testing.T)   // testdata/red → errors.Is(err, E
 func TestPrepareNoTriple(t *testing.T)      // testdata/onefunc → errors.Is(err, ErrNoTriple)
 ```
 
-- [ ] **Step 6:** Реализовать `Prepare`:
+- [x] **Step 6:** Реализовать `Prepare`:
   1. `BaselineRuns` вариантов оригинала в одном `Batch`: все зелёные и с одинаковым набором тестов, иначе `ErrBaselineRed`. Текст ошибки перечисляет упавшие тесты.
   2. `Generate` → каждый кандидат отдельным вариантом в одном `Batch`. Отбросить сборочные ошибки, таймауты и выживших.
   3. Отсортировать по `Score`, взять top-12, перебирать тройки с разными `Func` по убыванию суммы `Score`, пропуская тройки, где у двух кандидатов совпадает `Failing`.
   4. Для каждой тройки нужны маски 3, 5, 6, 7 (маски 0, 1, 2, 4 уже известны). По `TriplesPerBatch` троек в одном `Batch`, не больше `MaxTriples`. Первая тройка, у которой `Independent` дал ok, становится результатом. Если такой нет, `ErrNoTriple`.
 
   `onProgress` вызывать после каждого `Batch`.
-- [ ] **Step 7:** Run: `go test ./internal/selector/...` → PASS.
+- [x] **Step 7:** Run: `go test ./internal/selector/...` → PASS.
 - [ ] **Step 8:** Commit: `feat(selector): отбор тройки с проверкой 8 комбинаций`.
 
 ---
@@ -506,7 +540,7 @@ func TestUserMessages(t *testing.T)             // для каждой Err* User
   func (st *Store) IDs() []string
   ```
 
-- [ ] **Step 1: Тесты**
+- [x] **Step 1: Тесты**
 
 ```go
 func TestStartSetsDeadline(t *testing.T)    // ready → Start(t0): State "running", Deadline == t0.Add(10*time.Minute); второй Start → ErrBadState
@@ -523,11 +557,11 @@ func TestStoreRoundTrip(t *testing.T)            // Create + Update; OpenStore(�
 ```
 
 - [ ] **Step 2:** Run: `go test ./internal/audit/...` → FAIL.
-- [ ] **Step 3:** Реализовать.
+- [x] **Step 3:** Реализовать.
   - `SetReady`: `Mutated = Plan.Mutated`. `Files` = копия `Mutated` только для не-тестовых `.go`. `Tests` = всё остальное. Задание и оригинал хранятся только на сервере.
   - `Detected` = есть отметка с этим `MutationID`. `Explained` = у неё `Accepted == true`. `Fixed` = все `KillingTests[i]` проходят в последнем прогоне с `Final == true`. `FixedAfterSec` = первый прогон, где они все прошли, считая от `StartedAt`. `Restored` = финальный прогон `AllPassed(BaselineTests)` и без `BuildError`.
   - `Store` сериализует `Session` целиком в `<dir>/<id>.json`, причём `[]byte` уходят в base64 по умолчанию. `Plan.Mutated` хранится в отдельном поле `Session.Mutated`.
-- [ ] **Step 4:** Run → PASS.
+- [x] **Step 4:** Run → PASS.
 - [ ] **Step 5:** Commit: `feat(audit): сессия с серверным таймером, отчёт, хранение в JSON`.
 
 ### Task 8: HTTP, WebSocket, подготовка, таймер (`internal/api`, `cmd/server`)
@@ -571,7 +605,7 @@ func TestStoreRoundTrip(t *testing.T)            // Create + Update; OpenStore(�
   `StudentView`: `state, serverNow, deadline?, files map[path]string, readOnly []string, runs []RunView, flags []{id,file,line,note}, report?` (`report` только в состоянии `finished`). Полей `mutations`, `hints`, `killingTests`, `mutated` нет.
   `AuditorView`: всё из `StudentView` плюс `progress, error, studentUrl, mutations, killingTests, hints, mutated, flags (с mutationId/accepted), events, stats`.
 
-- [ ] **Step 1: Тесты** (`httptest.Server`; `Prepare` — фейк, сразу возвращающий план на textkit с мутациями `m1..m3`; `Runner` — фейк с настраиваемым ответом и каналом-блокировкой; `Now` — управляемые часы):
+- [x] **Step 1: Тесты** (`httptest.Server`; `Prepare` — фейк, сразу возвращающий план на textkit с мутациями `m1..m3`; `Runner` — фейк с настраиваемым ответом и каналом-блокировкой; `Now` — управляемые часы):
 
 ```go
 func TestCreateAuditExampleBecomesReady(t *testing.T) // POST {"example":"textkit"} → 201; GET аудитора в течение 2 с даёт state "ready", studentUrl непустой
@@ -588,13 +622,13 @@ func TestPrepareFailureShownToAuditor(t *testing.T)   // Prepare вернул Er
 ```
 
 - [ ] **Step 2:** Run: `go test ./internal/api/...` → FAIL.
-- [ ] **Step 3:** Реализовать `Server`.
+- [x] **Step 3:** Реализовать `Server`.
   - Маршруты на `http.ServeMux` с шаблонами Go 1.22 (`"POST /api/s/{tok}/run"`).
   - Подготовка в горутине: `Importer.Import` → `Prepare` (прогресс в `Store.Update` + рассылка) → `Hinter.Hints` с таймаутом 20 с → `SetReady`. Любая ошибка → `Fail(project.UserMessage(err))` или текст для `ErrBaselineRed` / `ErrNoTriple`.
   - Прогон: `RunFiles()` → `sandbox.WriteVariant(<work>/<id>/run-<n>, "v", …)` → `Runner.Run` с таймаутом 60 с → `AddRun` → рассылка. Не больше одного прогона на сессию одновременно.
   - Хаб: `map[sessionID][]*conn` под мьютексом, у каждого соединения своя роль. `Tick` финализирует только сессии, у которых `Expired`.
   - `cmd/server/main.go`: чтение переменных из README. `LCME_RUNNER=local` пишет предупреждение в лог. `MaxGo` берётся из `Runner.GoVersion` на старте (`"go1.26.2"` → `"1.26"`). `Prepare` = `func(ctx, p, cb) { return selector.Prepare(ctx, p.Files, p.GoFiles(), runner, workDir, selector.DefaultOptions, cb) }`. `Static` = `fs.Sub(web.Dist, "dist")`. Тикер раз в 1 с.
-- [ ] **Step 4:** Run: `go test ./internal/api/...` → PASS; `go test ./...` → PASS.
+- [x] **Step 4:** Run: `go test ./internal/api/...` → PASS; `go test ./...` → PASS.
 - [ ] **Step 5:** Ручная проверка: `LCME_RUNNER=docker go run ./cmd/server`. Выполнить `curl -X POST localhost:8080/api/audits -d '{"example":"textkit"}'`, затем `curl localhost:8080/api/a/<tok>` и дождаться `"state":"ready"` (с Docker < 60 с).
 - [ ] **Step 6:** Commit: `feat(api): REST, WebSocket, фоновая подготовка, серверный таймер`.
 
@@ -623,9 +657,9 @@ func TestPrepareFailureShownToAuditor(t *testing.T)   // Prepare вернул Er
   ```
   `web/embed.go`: `package web`, `//go:embed all:dist`, `var Dist embed.FS`.
 
-- [ ] **Step 1:** `npm create vite@latest web -- --template react-ts` (в существующую папку), затем `npm i react-router-dom @monaco-editor/react qrcode.react`. Скрипт `"typecheck": "tsc --noEmit"`.
-- [ ] **Step 2:** `Home`: поле «Ссылка на git-репозиторий (https)», кнопки «Подготовить аудит» и «Попробовать на демо-проекте». После ответа переход на `auditorUrl`. Ошибка запроса выводится под формой.
-- [ ] **Step 3:** Run: `npm run typecheck && npm run build` → без ошибок, `web/dist/index.html` есть. `go build ./...` → OK (embed видит `dist`).
+- [x] **Step 1:** `npm create vite@latest web -- --template react-ts` (в существующую папку), затем `npm i react-router-dom @monaco-editor/react qrcode.react`. Скрипт `"typecheck": "tsc --noEmit"`.
+- [x] **Step 2:** `Home`: поле «Ссылка на git-репозиторий (https)», кнопки «Подготовить аудит» и «Попробовать на демо-проекте». После ответа переход на `auditorUrl`. Ошибка запроса выводится под формой.
+- [x] **Step 3:** Run: `npm run typecheck && npm run build` → без ошибок, `web/dist/index.html` есть. `go build ./...` → OK (embed видит `dist`).
 - [ ] **Step 4:** Ручная проверка: `make dev` → на `localhost:5173` нажать «демо-проект» → открывается `/a/<tok>` (пока пустая страница).
 - [ ] **Step 5:** Commit: `feat(web): каркас, клиенты API и WebSocket, стартовая страница`.
 
@@ -634,16 +668,16 @@ func TestPrepareFailureShownToAuditor(t *testing.T)   // Prepare вернул Er
 **Files:**
 - Create: `web/src/pages/Student.tsx`, `web/src/components/Timer.tsx`, `web/src/components/FileTree.tsx`, `web/src/components/TestResults.tsx`
 
-- [ ] **Step 1:** Состояние `ready`: правила (10 минут, без ИИ-помощников, тесты только для чтения, отмечайте найденные ошибки) и кнопка «Начать». Кнопка вызывает `POST start` и просит полноэкранный режим.
-- [ ] **Step 2:** Состояние `running`:
+- [x] **Step 1:** Состояние `ready`: правила (10 минут, без ИИ-помощников, тесты только для чтения, отмечайте найденные ошибки) и кнопка «Начать». Кнопка вызывает `POST start` и просит полноэкранный режим.
+- [x] **Step 2:** Состояние `running`:
   - слева `FileTree`, файлы из `readOnly` с замком;
   - в центре Monaco `Editor` (язык `go`, `readOnly` для тестов); правки уходят по WS `{"type":"file"}` с задержкой 1 с после последнего ввода;
   - сверху `Timer`, который краснеет на последней минуте, и кнопки «Запустить тесты» и «Завершить»;
   - снизу `TestResults` из последнего прогона (имя, pass/fail/timeout, вывод по клику); во время прогона спиннер и выключенная кнопка;
   - кнопка «Здесь ошибка» берёт строку курсора и открывает поле для короткого комментария → `POST flags`;
   - список своих отметок.
-- [ ] **Step 3:** Состояние `finished`: `ReportView` (Task 12; до неё — заглушка «Сессия завершена»).
-- [ ] **Step 4:** Проверка: `npm run typecheck && npm run build`. Вручную на демо-проекте: начать, исправить одну мутацию, запустить тесты (число зелёных растёт), поставить отметку, обновить страницу (таймер продолжает с того же места).
+- [x] **Step 3:** Состояние `finished`: `ReportView` (Task 12; до неё — заглушка «Сессия завершена»).
+- [x] **Step 4:** Проверка: `npm run typecheck && npm run build`. Вручную на демо-проекте: начать, исправить одну мутацию, запустить тесты (число зелёных растёт), поставить отметку, обновить страницу (таймер продолжает с того же места).
 - [ ] **Step 5:** Commit: `feat(web): экран студента`.
 
 ### Task 11: Экран аудитора
@@ -651,15 +685,15 @@ func TestPrepareFailureShownToAuditor(t *testing.T)   // Prepare вернул Er
 **Files:**
 - Create: `web/src/pages/Auditor.tsx`, `web/src/components/MutationCard.tsx`
 
-- [ ] **Step 1:** Состояние `preparing`: этап (`baseline` → «Проверяем оригинал», `candidates` → «Ищем мутации», `triples` → «Проверяем независимость») и прогресс `done/total`. Состояние `failed`: текст ошибки и кнопка «Другой репозиторий».
-- [ ] **Step 2:** Состояния `ready` и `running`:
+- [x] **Step 1:** Состояние `preparing`: этап (`baseline` → «Проверяем оригинал», `candidates` → «Ищем мутации», `triples` → «Проверяем независимость») и прогресс `done/total`. Состояние `failed`: текст ошибки и кнопка «Другой репозиторий».
+- [x] **Step 2:** Состояния `ready` и `running`:
   - шапка: таймер, состояние, ссылка студента с кнопкой «Скопировать»;
   - три `MutationCard`: файл:строка, вид, `orig → repl`, текст подсказки (Task 14), статус «исправлена» по последнему прогону (все `killingTests[i]` прошли);
   - Monaco `DiffEditor`: слева `mutated[file]` (только чтение), справа текущий файл студента, обновляется по событию `file`. Строки мутаций слева подсвечены через `deltaDecorations`. Выбор файла — вкладками;
   - список отметок студента: у каждой кнопки «#1 / #2 / #3» и «Объяснение принято / Не принято» → `POST /api/a/{tok}/flags/{id}`;
   - история прогонов: время и число зелёных из общего числа;
   - кнопка «Завершить».
-- [ ] **Step 3:** Проверка: typecheck + build. Вручную в двух окнах (аудитор и студент в режиме инкогнито): правка студента видна аудитору за ≤ 2 с, отметка появляется у аудитора, привязка к #2 сохраняется после перезагрузки.
+- [x] **Step 3:** Проверка: typecheck + build. Вручную в двух окнах (аудитор и студент в режиме инкогнито): правка студента видна аудитору за ≤ 2 с, отметка появляется у аудитора, привязка к #2 сохраняется после перезагрузки.
 - [ ] **Step 4:** Commit: `feat(web): экран аудитора с живым diff и разбором отметок`.
 
 ### Task 12: Отчёт и сборка в один бинарник
@@ -668,9 +702,9 @@ func TestPrepareFailureShownToAuditor(t *testing.T)   // Prepare вернул Er
 - Create: `web/src/components/ReportView.tsx`
 - Modify: `Makefile` (`build` зависит от `web`)
 
-- [ ] **Step 1:** `ReportView`: таблица по мутациям с колонками «Мутация» (файл:строка, `orig → repl`), «Обнаружена», «Объяснена», «Исправлена», «Время». Над таблицей плашка «Проект восстановлен / не восстановлен». Под ней блок «Сигналы» с подписью «события, не доказательства»: уходы со вкладки, вставки и их объём. Кнопка «Печать» (`window.print()`).
-- [ ] **Step 2:** Подключить `ReportView` у студента и у аудитора в состоянии `finished`.
-- [ ] **Step 3:** Run: `make build && ./bin/lcme` → `localhost:8080` отдаёт интерфейс без Vite. Глубокая ссылка `/a/<tok>` открывается после перезагрузки (SPA-фолбэк).
+- [x] **Step 1:** `ReportView`: таблица по мутациям с колонками «Мутация» (файл:строка, `orig → repl`), «Обнаружена», «Объяснена», «Исправлена», «Время». Над таблицей плашка «Проект восстановлен / не восстановлен». Под ней блок «Сигналы» с подписью «события, не доказательства»: уходы со вкладки, вставки и их объём. Кнопка «Печать» (`window.print()`).
+- [x] **Step 2:** Подключить `ReportView` у студента и у аудитора в состоянии `finished`.
+- [x] **Step 3:** Run: `make build && ./bin/lcme` → `localhost:8080` отдаёт интерфейс без Vite. Глубокая ссылка `/a/<tok>` открывается после перезагрузки (SPA-фолбэк).
 - [ ] **Step 4:** Commit: `feat(web): отчёт и встраивание интерфейса в бинарник`.
 
 ---
@@ -719,7 +753,7 @@ func TestPrepareFailureShownToAuditor(t *testing.T)   // Prepare вернул Er
   func Fallback(primary, secondary Hinter) Hinter
   ```
 
-- [ ] **Step 1: Тесты**
+- [x] **Step 1: Тесты**
 
 ```go
 func TestTemplateCoversAllKinds(t *testing.T)    // для каждого Kind: Explanation и Question не пусты, Source "template"
@@ -740,10 +774,10 @@ func TestOpenRouterTimeout(t *testing.T)          // сервер спит 3 с,
 - Modify: `web/src/pages/Student.tsx`, `web/src/pages/Auditor.tsx`, `internal/audit/session.go`
 - Test: `internal/audit/session_test.go`
 
-- [ ] **Step 1: Тест** `TestAddEventKinds`: `"hidden"`, `"visible"` и `"paste"` принимаются, `"keylog"` → ошибка; события после `Deadline` игнорируются.
-- [ ] **Step 2:** Run → FAIL → реализовать проверку в `AddEvent` → PASS.
-- [ ] **Step 3:** Студент: `document.visibilitychange` → событие `hidden`/`visible`; `editor.onDidPaste(e)` → событие `paste` с длиной вставленного текста. Аудитор: лента событий с подписью «сигналы, не доказательства» и QR-код ссылки студента (`qrcode.react`).
-- [ ] **Step 4:** Доводка: пустые и загрузочные состояния на всех экранах, понятные тексты ошибок, тёмная тема Monaco, адаптация под экран проектора 1280×720.
+- [x] **Step 1: Тест** `TestAddEventKinds`: `"hidden"`, `"visible"` и `"paste"` принимаются, `"keylog"` → ошибка; события после `Deadline` игнорируются.
+- [x] **Step 2:** Run → FAIL → реализовать проверку в `AddEvent` → PASS.
+- [x] **Step 3:** Студент: `document.visibilitychange` → событие `hidden`/`visible`; `editor.onDidPaste(e)` → событие `paste` с длиной вставленного текста. Аудитор: лента событий с подписью «сигналы, не доказательства» и QR-код ссылки студента (`qrcode.react`).
+- [x] **Step 4:** Доводка: пустые и загрузочные состояния на всех экранах, понятные тексты ошибок, тёмная тема Monaco, адаптация под экран проектора 1280×720.
 - [ ] **Step 5:** Проверка: typecheck + build + сквозной сценарий из Task 13 Step 3.
 - [ ] **Step 6:** Commit: `feat: сигналы вкладки и вставок, QR-код, доводка интерфейса`.
 

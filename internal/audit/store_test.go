@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"lcme/internal/project"
+	"lcme/internal/sandbox"
 )
 
 func sourceZero() project.Source { return project.Source{} }
@@ -41,6 +42,7 @@ func TestStoreRoundTrip(t *testing.T) {
 		}
 		_, _ = x.AddFlag("textkit.go", 4, "unreviewed", t0.Add(3*time.Second))
 		_ = x.AddEvent("paste", 7, t0.Add(4*time.Second))
+		x.FinishRequestedAt = t0.Add(5 * time.Second)
 		x.AddRun(vr(map[string]bool{"TestA": true}), true, t0.Add(5*time.Second))
 		return nil
 	})
@@ -127,6 +129,69 @@ func TestStoreUpdateErrorLeavesSessionUnchanged(t *testing.T) {
 	})
 	if err := st.Update("missing", func(*Session) error { return nil }); err == nil {
 		t.Error("update of missing session must fail")
+	}
+}
+
+func TestStoreOwnsRunResultsOnCreate(t *testing.T) {
+	st, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := runningSession(t)
+	s.AddRun(vr(map[string]bool{"TestA": true}), false, t0)
+	if err := st.Create(s); err != nil {
+		t.Fatal(err)
+	}
+	s.Runs[0].Result.Tests[0].Status = sandbox.StatusFail
+	st.View(s.ID, func(x *Session) {
+		if !x.Runs[0].Result.Passed(".:TestA") {
+			t.Error("caller changed stored run result")
+		}
+	})
+}
+
+func TestStoreRollsBackRunResults(t *testing.T) {
+	for _, failWrite := range []bool{false, true} {
+		name := "callback failure"
+		if failWrite {
+			name = "write failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			st, err := OpenStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := runningSession(t)
+			s.AddRun(vr(map[string]bool{"TestA": true}), false, t0)
+			if err := st.Create(s); err != nil {
+				t.Fatal(err)
+			}
+			wantErr := errors.New("callback failed")
+			if failWrite {
+				// Fail in CreateTemp without changing the persisted session.
+				st.dir = filepath.Join(dir, s.ID+".json")
+				wantErr = nil
+			}
+			err = st.Update(s.ID, func(x *Session) error {
+				x.Runs[0].Result.Tests[0].Status = sandbox.StatusFail
+				return wantErr
+			})
+			if err == nil || (!failWrite && !errors.Is(err, wantErr)) {
+				t.Fatalf("Update error = %v", err)
+			}
+			assertResult := func(x *Session) {
+				if !x.Runs[0].Result.Passed(".:TestA") {
+					t.Error("test result changed despite failed update")
+				}
+			}
+			st.View(s.ID, assertResult)
+			reopened, err := OpenStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reopened.View(s.ID, assertResult)
+		})
 	}
 }
 

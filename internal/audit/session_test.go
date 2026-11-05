@@ -3,7 +3,6 @@ package audit
 import (
 	"bytes"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -122,8 +121,11 @@ func TestUpdateFileRules(t *testing.T) {
 	if err := s.UpdateFile("textkit.go", []byte("new"), t0.Add(10*time.Minute+time.Nanosecond)); !errors.Is(err, ErrExpired) {
 		t.Errorf("expired = %v", err)
 	}
-	if err := s.UpdateFile("textkit.go", []byte("new"), t0.Add(10*time.Minute)); err != nil {
-		t.Errorf("at deadline = %v", err)
+	if err := s.UpdateFile("textkit.go", []byte("new"), s.Deadline); !errors.Is(err, ErrExpired) {
+		t.Errorf("at deadline = %v, want ErrExpired", err)
+	}
+	if err := s.UpdateFile("textkit.go", []byte("new"), s.Deadline.Add(-time.Nanosecond)); err != nil {
+		t.Errorf("before deadline = %v", err)
 	}
 	if !bytes.Equal(s.Files["textkit.go"], []byte("new")) {
 		t.Errorf("Files not updated: %q", s.Files["textkit.go"])
@@ -148,8 +150,8 @@ func TestExpiredAndFinish(t *testing.T) {
 		t.Error("ready session cannot expire")
 	}
 	_ = s.Start(t0)
-	if s.Expired(t0.Add(10 * time.Minute)) {
-		t.Error("not expired at deadline")
+	if !s.Expired(s.Deadline) {
+		t.Error("must expire at deadline")
 	}
 	if !s.Expired(t0.Add(10*time.Minute + time.Second)) {
 		t.Error("expired after deadline")
@@ -189,14 +191,71 @@ func TestFlagsAndReview(t *testing.T) {
 	}
 }
 
-func TestAddEventAndRun(t *testing.T) {
+func TestAddEventKinds(t *testing.T) {
 	s := readySession(t)
-	_ = s.AddEvent("paste", 5, t0)
-	s.AddRun(sandbox.VariantResult{ID: "x"}, true, t0)
-	if len(s.Events) != 1 || len(s.Runs) != 1 || !s.Runs[0].Final || s.Events[0].Size != 5 {
-		t.Fatalf("%+v %+v", s.Events, s.Runs)
+	if err := s.AddEvent("hidden", 0, t0); err != nil {
+		t.Fatalf("event before start: %v", err)
 	}
-	if strings.TrimSpace(s.Events[0].Kind) != "paste" {
-		t.Fatal("kind")
+	if err := s.Start(t0); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []Event{{Kind: "hidden"}, {Kind: "visible"}, {Kind: "paste", Size: 5}} {
+		at := s.Deadline.Add(-time.Nanosecond)
+		before := len(s.Events)
+		if err := s.AddEvent(event.Kind, event.Size, at); err != nil {
+			t.Fatalf("event %s: %v", event.Kind, err)
+		}
+		if len(s.Events) != before+1 {
+			t.Fatalf("event %s was not appended", event.Kind)
+		}
+		last := s.Events[len(s.Events)-1]
+		if last.Kind != event.Kind || last.Size != event.Size || !last.At.Equal(at) {
+			t.Errorf("stored event = %+v, want %s size %d", last, event.Kind, event.Size)
+		}
+	}
+	for _, event := range []Event{{Kind: "keylog"}, {Kind: "paste", Size: -1}} {
+		if err := s.AddEvent(event.Kind, event.Size, t0); !errors.Is(err, ErrInvalidEvent) {
+			t.Errorf("invalid event %+v: %v", event, err)
+		}
+	}
+	for _, at := range []time.Time{s.Deadline, s.Deadline.Add(time.Nanosecond)} {
+		if err := s.AddEvent("hidden", 0, at); err != nil {
+			t.Errorf("late event: %v", err)
+		}
+	}
+	s.Finish(t0.Add(time.Minute))
+	if err := s.AddEvent("visible", 0, t0.Add(2*time.Minute)); err != nil {
+		t.Errorf("event after early finish: %v", err)
+	}
+	if len(s.Events) != 3 {
+		t.Errorf("events = %+v, want only three valid running events", s.Events)
+	}
+}
+
+func TestFinishRequestedFreezesStudentInput(t *testing.T) {
+	s := runningSession(t)
+	s.FinishRequestedAt = t0.Add(time.Minute)
+	at := t0.Add(2 * time.Minute)
+	if err := s.UpdateFile("textkit.go", []byte("new"), at); !errors.Is(err, ErrBadState) {
+		t.Errorf("update after finish request = %v", err)
+	}
+	if _, err := s.AddFlag("textkit.go", 1, "", at); !errors.Is(err, ErrBadState) {
+		t.Errorf("flag after finish request = %v", err)
+	}
+	if err := s.AddEvent("paste", 5, at); err != nil || len(s.Events) != 0 {
+		t.Errorf("event after finish request: err=%v events=%+v", err, s.Events)
+	}
+	if s.Expired(at) || !s.Expired(s.Deadline) {
+		t.Error("finish request must preserve deadline")
+	}
+}
+
+func TestAddRunOwnsTests(t *testing.T) {
+	s := runningSession(t)
+	result := vr(map[string]bool{"TestA": true})
+	s.AddRun(result, true, t0)
+	result.Tests[0].Status = sandbox.StatusFail
+	if len(s.Runs) != 1 || !s.Runs[0].Final || !s.Runs[0].Result.Passed(".:TestA") {
+		t.Fatalf("runs = %+v", s.Runs)
 	}
 }

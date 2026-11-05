@@ -92,3 +92,22 @@ func TestGenerateSkipsBigConstants(t *testing.T) {
 		t.Errorf("consts = %+v", consts)
 	}
 }
+
+func TestGenerateUsesPhysicalLine(t *testing.T) {
+	const source = "package p\n//line other.go:900\nfunc F() int { return 1 }\n"
+	files := map[string][]byte{"physical.go": []byte(source)}
+	ms, err := Generate(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ms) != 1 || ms[0].File != "physical.go" || ms[0].Line != 3 || ms[0].Start != strings.Index(source, "1 }") {
+		t.Fatalf("mutations = %+v, want the physical position of 1", ms)
+	}
+	got, err := Apply(files, ms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Replace(source, "1 }", "2 }", 1); string(got["physical.go"]) != want {
+		t.Errorf("mutated source = %q, want %q", got["physical.go"], want)
+	}
+}
