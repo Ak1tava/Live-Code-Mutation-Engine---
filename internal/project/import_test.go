@@ -199,6 +199,28 @@ func TestImportRejectsRequire(t *testing.T) {
 	}
 }
 
+func TestImportGoDirectiveWithTab(t *testing.T) {
+	im := newImporter(t, fixture(t, "module\tm\n\ngo\t1.99\n", nil))
+	if _, err := im.Import(context.Background(), Source{GitURL: goodURL}); !errors.Is(err, ErrGoTooNew) {
+		t.Errorf("go<tab>1.99: err = %v", err)
+	}
+	im = newImporter(t, fixture(t, "module m\n\ngo 1.22\n\nrequire\tgithub.com/x/y v1.0.0\n", nil))
+	if _, err := im.Import(context.Background(), Source{GitURL: goodURL}); !errors.Is(err, ErrExternalDeps) {
+		t.Errorf("require<tab>: err = %v", err)
+	}
+	im = newImporter(t, fixture(t, "module m\n\ngo 1.22\n\nrequire(\n\tgithub.com/x/y v1.0.0\n)\n", nil))
+	if _, err := im.Import(context.Background(), Source{GitURL: goodURL}); !errors.Is(err, ErrExternalDeps) {
+		t.Errorf("require(: err = %v", err)
+	}
+}
+
+func TestParseGoModNotFooled(t *testing.T) {
+	m, v, req := parseGoMod("module m\ngo 1.22\nrequirefoo bar\n")
+	if m != "m" || v != "1.22" || req {
+		t.Errorf("got %q %q %v", m, v, req)
+	}
+}
+
 func TestImportRejectsNoGoMod(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a.go", "package a\n")

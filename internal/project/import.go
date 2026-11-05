@@ -262,14 +262,17 @@ func parseGoMod(s string) (module, goVer string, hasRequire bool) {
 		if i := strings.Index(line, "//"); i >= 0 {
 			line = line[:i]
 		}
-		line = strings.TrimSpace(line)
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
 		switch {
-		case strings.HasPrefix(line, "require"):
+		case f[0] == "require" || f[0] == "require(":
 			hasRequire = true
-		case strings.HasPrefix(line, "module") && module == "":
-			module = strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "module")), `"`)
-		case strings.HasPrefix(line, "go ") && goVer == "":
-			goVer = strings.TrimSpace(strings.TrimPrefix(line, "go "))
+		case f[0] == "module" && module == "" && len(f) > 1:
+			module = strings.Trim(f[1], `"`)
+		case f[0] == "go" && goVer == "" && len(f) > 1:
+			goVer = f[1]
 		}
 	}
 	return
