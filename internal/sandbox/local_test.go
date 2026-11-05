@@ -277,14 +277,14 @@ func TestLocalDurationRecorded(t *testing.T) {
 }
 
 func TestLocalInitHangBounded(t *testing.T) {
-	// init lives in the non-test package file, so the test binary hangs while listing.
+	// Discovery does not execute init. Each known test still has a bounded process.
 	files := tinyProject("import \"testing\"\n\nfunc TestX(t *testing.T) {}\n", "\nfunc init() {\n\tfor {\n\t}\n}\n")
 	start := time.Now()
 	r := runOne(t, variant(t, files))
 	if r.BuildError != "" {
 		t.Fatalf("BuildError: %s", r.BuildError)
 	}
-	if len(r.Tests) != 1 || r.Tests[0].Status != StatusTimeout || r.Tests[0].Name != "(init)" {
+	if len(r.Tests) != 1 || r.Tests[0].Status != StatusTimeout || r.Tests[0].Name != "TestX" {
 		t.Fatalf("tests = %+v", r.Tests)
 	}
 	if d := time.Since(start); d > 10*time.Second {

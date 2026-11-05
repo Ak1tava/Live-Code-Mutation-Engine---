@@ -36,12 +36,15 @@ type Deps struct {
 	PublicURL      string
 	Static         fs.FS
 	AllowGitImport bool
+	PrepareTimeout time.Duration
 }
 
 type Server struct {
 	d        Deps
 	sessions sync.Map // session ID → *sessionRuntime
 	handler  http.Handler
+	workers  chan struct{}
+	createMu sync.Mutex // serializes the retained-session limit with Store.Create
 }
 
 // mu serializes state changes, test captures and publication for one session.
@@ -61,7 +64,10 @@ func New(d Deps) *Server {
 	if d.WorkDir == "" {
 		d.WorkDir = os.TempDir()
 	}
-	s := &Server{d: d}
+	if d.PrepareTimeout <= 0 {
+		d.PrepareTimeout = 3 * time.Minute
+	}
+	s := &Server{d: d, workers: make(chan struct{}, 2)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/audits", s.create)
 	mux.HandleFunc("GET /api/a/{tok}", s.authorize(audit.RoleAuditor, s.getView))
@@ -138,7 +144,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session := audit.New(src, s.d.Now())
-	if err := s.d.Store.Create(session); err != nil {
+	if err := s.admitSession(session); err != nil {
 		writeSessionError(w, err)
 		return
 	}
@@ -148,9 +154,44 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	}{"/a/" + session.AuditorToken})
 }
 
+// Admission happens before persistence and before launching any background work.
+func (s *Server) admitSession(session *audit.Session) error {
+	if !s.acquireWorker() {
+		return errOverloaded
+	}
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	if len(s.d.Store.IDs()) >= 64 {
+		s.releaseWorker()
+		return errSessionCapacity
+	}
+	if err := s.d.Store.Create(session); err != nil {
+		s.releaseWorker()
+		return err
+	}
+	return nil
+}
+
+func (s *Server) acquireWorker() bool {
+	select {
+	case s.workers <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) releaseWorker() { <-s.workers }
+
 func (s *Server) prepare(id string, src project.Source) {
-	ctx := context.Background()
+	defer s.releaseWorker()
+	ctx, cancel := context.WithTimeout(context.Background(), s.d.PrepareTimeout)
+	defer cancel()
 	p, err := s.d.Importer.Import(ctx, src)
+	if ctx.Err() != nil {
+		s.failPreparation(id, "Превышено время подготовки задания. Попробуйте проект меньшего размера.")
+		return
+	}
 	if err != nil {
 		s.failPreparation(id, project.UserMessage(err))
 		return
@@ -164,6 +205,9 @@ func (s *Server) prepare(id string, src project.Source) {
 		}
 	})
 	switch {
+	case ctx.Err() != nil:
+		s.failPreparation(id, "Превышено время подготовки задания. Попробуйте проект меньшего размера.")
+		return
 	case errors.Is(err, selector.ErrBaselineRed):
 		s.failPreparation(id, "Тесты исходного проекта должны пройти три раза подряд.")
 		return
@@ -179,9 +223,13 @@ func (s *Server) prepare(id string, src project.Source) {
 	for _, m := range plan.Mutations {
 		input = append(input, hints.Input{M: m, Snippet: hints.Snippet(p.Files[m.File], m.Line)})
 	}
-	hintCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	hintCtx, cancelHints := context.WithTimeout(ctx, 20*time.Second)
 	h, err := s.d.Hinter.Hints(hintCtx, input)
-	cancel()
+	cancelHints()
+	if ctx.Err() != nil {
+		s.failPreparation(id, "Превышено время подготовки задания. Попробуйте проект меньшего размера.")
+		return
+	}
 	if err != nil {
 		h, _ = hints.Template().Hints(ctx, input)
 	}
@@ -321,9 +369,11 @@ func readBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 }
 
 var (
-	errSourceDisabled = errors.New("api: source disabled")
-	errBusy           = errors.New("api: run already in progress")
-	errLine           = errors.New("api: invalid line")
+	errSourceDisabled  = errors.New("api: source disabled")
+	errBusy            = errors.New("api: run already in progress")
+	errOverloaded      = errors.New("api: all workers busy")
+	errSessionCapacity = errors.New("api: retained session limit reached")
+	errLine            = errors.New("api: invalid line")
 )
 
 func sessionError(err error) (int, string) {
@@ -332,6 +382,10 @@ func sessionError(err error) (int, string) {
 		return http.StatusForbidden, "В этом режиме доступен только демо-проект textkit."
 	case errors.Is(err, errBusy):
 		return http.StatusConflict, "Тесты уже выполняются."
+	case errors.Is(err, errOverloaded):
+		return http.StatusTooManyRequests, "Сервер занят подготовкой и проверкой заданий. Повторите попытку позже."
+	case errors.Is(err, errSessionCapacity):
+		return http.StatusServiceUnavailable, "Достигнут предел сохранённых сессий. Обратитесь к организатору демо."
 	case errors.Is(err, audit.ErrExpired):
 		return http.StatusConflict, "Время сессии вышло."
 	case errors.Is(err, audit.ErrBadState):

@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,10 +24,6 @@ import (
 
 const (
 	buildTimeout = 60 * time.Second
-	// listTimeout bounds the -test.list step, which runs student init code.
-	listTimeout = 5 * time.Second
-	// listTailSize is how much of the listing output is kept.
-	listTailSize = 1 << 20
 	// tailSize is how much trailing output is kept for marker detection.
 	tailSize = 64 * 1024
 )
@@ -102,18 +100,19 @@ func runVariant(dir, id, tmp string, testTimeout time.Duration) (res sandbox.Var
 	}
 	for n, pkg := range pkgs {
 		bin := filepath.Join(binDir, strconv.Itoa(n)+".test")
-		if out, err := goBuild(dir, pkg, bin); err != nil {
+		names, overlay, err := discoverAndInstrument(dir, pkg, bin)
+		if err != nil {
+			res.BuildError = capOutput([]byte(err.Error()))
+			res.Tests = []sandbox.TestResult{}
+			return res
+		}
+		if out, err := goBuild(dir, pkg, bin, overlay); err != nil {
 			res.BuildError = capOutput(out)
 			if res.BuildError == "" {
 				res.BuildError = err.Error()
 			}
 			res.Tests = []sandbox.TestResult{}
 			return res
-		}
-		names, failed := listTests(dir, pkg, bin)
-		if failed != nil {
-			res.Tests = append(res.Tests, *failed)
-			continue
 		}
 		for _, name := range names {
 			res.Tests = append(res.Tests, runTest(dir, pkg, bin, name, testTimeout))
@@ -157,10 +156,10 @@ func testPackages(root string) ([]string, error) {
 	return pkgs, nil
 }
 
-func goBuild(dir, pkg, bin string) ([]byte, error) {
+func goBuild(dir, pkg, bin, overlay string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "test", "-c", "-o", bin, "./"+pkg)
+	cmd := exec.CommandContext(ctx, "go", "test", "-c", "-overlay", overlay, "-o", bin, "./"+pkg)
 	cmd.Dir = dir
 	sandbox.SetProcessGroup(cmd)
 	t := &tail{n: sandbox.OutputCap}
@@ -170,62 +169,64 @@ func goBuild(dir, pkg, bin string) ([]byte, error) {
 	return t.bytes(), err
 }
 
-// listTests asks the test binary for its test names. The binary runs student
-// code (init, TestMain), so it is bounded by listTimeout; if listing fails or
-// hangs, a synthetic "(init)" result is returned instead of names.
-func listTests(dir, pkg, bin string) ([]string, *sandbox.TestResult) {
-	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "-test.list", "^Test")
-	cmd.Dir = filepath.Join(dir, filepath.FromSlash(pkg))
-	sandbox.SetProcessGroup(cmd)
-	t := &tail{n: listTailSize}
-	cmd.Stdout, cmd.Stderr = t, t
-	err := cmd.Run()
-	sandbox.KillGroup(cmd)
-	out := t.bytes()
-	if err != nil {
-		tr := &sandbox.TestResult{Pkg: pkg, Name: "(init)", Output: capOutput(out)}
-		if ctx.Err() != nil {
-			tr.Status = sandbox.StatusTimeout
-		} else {
-			tr.Status = sandbox.StatusFail
-			tr.Panicked = bytes.Contains(out, []byte("panic: "))
-		}
-		return nil, tr
-	}
-	var names []string
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Test") {
-			names = append(names, line)
-		}
-	}
-	return names, nil
-}
-
 func runTest(dir, pkg, bin, name string, testTimeout time.Duration) sandbox.TestResult {
-	tr := sandbox.TestResult{Pkg: pkg, Name: name}
+	tr := sandbox.TestResult{Pkg: pkg, Name: name, Status: sandbox.StatusFail}
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout+3*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "-test.run", "^"+name+"$", "-test.count", "1", "-test.timeout", testTimeout.String())
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		tr.Output = capOutput([]byte(err.Error()))
+		return tr
+	}
+	defer reader.Close()
+	defer writer.Close()
+	deadline, _ := ctx.Deadline()
+	if err := reader.SetReadDeadline(deadline); err != nil {
+		tr.Output = capOutput([]byte(err.Error()))
+		return tr
+	}
+	type completionRead struct {
+		data []byte
+		err  error
+	}
+	received := make(chan completionRead, 1)
+	go func() {
+		// Bound both memory and the lifetime of inherited completion FDs.
+		data, err := io.ReadAll(io.LimitReader(reader, 4097))
+		reader.Close()
+		received <- completionRead{data, err}
+	}()
+	cmd := exec.CommandContext(ctx, bin, "-test.run", "^"+regexp.QuoteMeta(name)+"$", "-test.count", "1", "-test.timeout", testTimeout.String(), "-test.paniconexit0")
 	cmd.Dir = filepath.Join(dir, filepath.FromSlash(pkg))
+	cmd.ExtraFiles = []*os.File{writer}
 	sandbox.SetProcessGroup(cmd)
 	t := &tail{n: tailSize}
 	cmd.Stdout, cmd.Stderr = t, t
-	err := cmd.Run()
+	err = cmd.Run()
 	sandbox.KillGroup(cmd)
+	writer.Close()
+	evidence := <-received
+	var completed struct {
+		Name            string
+		Failed, Skipped *bool
+	}
+	confirmed := evidence.err == nil && len(evidence.data) <= 4096 &&
+		json.Unmarshal(evidence.data, &completed) == nil && completed.Name == name &&
+		completed.Failed != nil && !*completed.Failed && completed.Skipped != nil && !*completed.Skipped
 	out := t.bytes()
 	timedOut := ctx.Err() != nil || bytes.Contains(out, []byte("panic: test timed out"))
 	switch {
 	case timedOut:
 		tr.Status = sandbox.StatusTimeout
-	case err == nil:
+	case err == nil && confirmed:
 		tr.Status = sandbox.StatusPass
 	default:
 		tr.Status = sandbox.StatusFail
 		tr.Panicked = bytes.Contains(out, []byte("panic: "))
 	}
 	tr.Output = capOutput(out)
+	if err == nil && !confirmed && !timedOut {
+		tr.Output = capOutput(append(out, []byte("\nlcme: requested test did not report successful completion\n")...))
+	}
 	return tr
 }

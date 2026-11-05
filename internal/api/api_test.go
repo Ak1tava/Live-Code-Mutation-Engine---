@@ -63,7 +63,7 @@ type fixture struct {
 	clock    atomic.Int64
 }
 
-func setup(t *testing.T, prepare api.PrepareFunc, run runner) *fixture {
+func setup(t *testing.T, prepare api.PrepareFunc, run runner, configure ...func(*api.Deps)) *fixture {
 	t.Helper()
 	root := t.TempDir()
 	f := &fixture{t: t, storeDir: filepath.Join(root, "state"), workDir: filepath.Join(root, "work")}
@@ -89,7 +89,11 @@ func setup(t *testing.T, prepare api.PrepareFunc, run runner) *fixture {
 	if run == nil {
 		run = pass
 	}
-	f.api = api.New(api.Deps{Store: f.store, Importer: &project.Importer{ExamplesDir: examples, WorkDir: f.workDir, MaxGo: "1.24"}, Prepare: prepare, Runner: run, WorkDir: f.workDir, Now: f.now})
+	deps := api.Deps{Store: f.store, Importer: &project.Importer{ExamplesDir: examples, WorkDir: f.workDir, MaxGo: "1.24"}, Prepare: prepare, Runner: run, WorkDir: f.workDir, Now: f.now}
+	for _, configure := range configure {
+		configure(&deps)
+	}
+	f.api = api.New(deps)
 	f.server = httptest.NewServer(f.api.Handler())
 	t.Cleanup(f.server.Close)
 	return f

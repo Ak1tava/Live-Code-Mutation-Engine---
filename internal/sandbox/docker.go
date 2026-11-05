@@ -41,7 +41,16 @@ func (d *Docker) runArgs(name, batchDir string, ids []string) []string {
 		"-u", "65534:65534",
 		"--cpus", "2",
 		"--memory", "1g",
+		"--memory-swap", "1g",
 		"--pids-limit", "512",
+		"--read-only",
+		// Untrusted code can reach PID 1's streams through /proc. Keep Docker
+		// from persisting such output outside the bounded container storage.
+		"--log-driver", "none",
+		// Go's cache, build workspace and test binaries share this finite mount.
+		// exec is required for the binaries; nosuid/nodev keep it data-only
+		// with respect to privilege changes and device access.
+		"--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=268435456,mode=1777",
 		"--name", name,
 		"--mount", "type=bind,src=" + batchDir + ",dst=/work,readonly",
 		d.image,

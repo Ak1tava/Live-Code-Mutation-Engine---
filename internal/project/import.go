@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,7 +72,7 @@ var (
 func UserMessage(err error) string {
 	switch {
 	case errors.Is(err, ErrBadURL):
-		return "Нужна ссылка на репозиторий вида https://… без логина и пароля."
+		return "Поддерживаются только публичные репозитории на Гитхабе: https://github.com/владелец/репозиторий, без пароля, параметров и перенаправлений."
 	case errors.Is(err, ErrClone):
 		return "Не удалось скачать репозиторий. Он может быть приватным или не существовать."
 	case errors.Is(err, ErrNoGoMod):
@@ -128,12 +129,12 @@ func (im *Importer) Import(ctx context.Context, src Source) (*Project, error) {
 		defer os.RemoveAll(tmp)
 		clone := im.Clone
 		if clone == nil {
-			clone = GitClone
+			clone = func(ctx context.Context, url, dst string) error { return gitClone(ctx, url, dst, lim) }
 		}
 		cctx, cancel := context.WithTimeout(ctx, lim.CloneTimeout)
 		defer cancel()
 		if err := clone(cctx, src.GitURL, tmp); err != nil {
-			if errors.Is(err, ErrClone) {
+			if errors.Is(err, ErrClone) || errors.Is(err, ErrTooLarge) || errors.Is(err, ErrBadURL) {
 				return nil, err
 			}
 			return nil, fmt.Errorf("%w: %v", ErrClone, err)
@@ -148,11 +149,20 @@ func checkURL(raw string) error {
 		return ErrBadURL
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.Host == "" {
+	if err != nil || u.Scheme != "https" || u.Host != "github.com" || u.User != nil ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#") ||
+		u.RawPath != "" || !githubPath.MatchString(u.Path) {
 		return ErrBadURL
+	}
+	for _, part := range strings.Split(strings.TrimSuffix(u.Path, "/"), "/")[1:] {
+		if part == "." || part == ".." {
+			return ErrBadURL
+		}
 	}
 	return nil
 }
+
+var githubPath = regexp.MustCompile(`^/[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}/?$`)
 
 // exampleDir принимает только имя существующего каталога прямо в ExamplesDir.
 func (im *Importer) exampleDir(name string) (string, error) {

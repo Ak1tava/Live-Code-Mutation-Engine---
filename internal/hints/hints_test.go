@@ -43,7 +43,7 @@ func TestOpenRouterRequest(t *testing.T) {
 				t.Errorf("wrong snippet: %+v %v", inputs, err)
 			}
 		}
-		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": "[{\"mutationId\":\"m1\",\"explanation\":\"e\",\"question\":\"q\"}]"}}}})
+		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]string{"content": "[{\"mutationId\":\"m1\",\"explanation\":\"e\",\"question\":\"q\"}]"}}}})
 	}))
 	defer srv.Close()
 	got, err := OpenRouter("k", "m", srv.URL, srv.Client()).Hints(context.Background(), sample())
@@ -54,7 +54,7 @@ func TestOpenRouterRequest(t *testing.T) {
 func TestOpenRouterBadJSONFallsBack(t *testing.T) {
 	for _, content := range []string{"не JSON", "[]", `[{"mutationId":"wrong","explanation":"e","question":"q"}]`} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": content}}}})
+			json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]string{"content": content}}}})
 		}))
 		got, err := Fallback(OpenRouter("k", "m", srv.URL, srv.Client()), Template()).Hints(context.Background(), sample())
 		srv.Close()

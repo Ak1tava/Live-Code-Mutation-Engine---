@@ -89,7 +89,28 @@ func newImporter(t *testing.T, src string) *Importer {
 	return im
 }
 
-const goodURL = "https://example.com/a/b.git"
+const goodURL = "https://github.com/example/repository.git"
+
+// Validation must run before any cloner (and therefore any outbound request).
+func TestImportRejectsUnsafeEndpoint(t *testing.T) {
+	for _, raw := range []string{
+		"https://127.0.0.1/a/b", "https://[::1]/a/b", "https://169.254.169.254/a/b",
+		"https://internal.example/a/b", "https://github.com.evil.test/a/b",
+		"https://user:secret@github.com/a/b", "https://github.com:8443/a/b",
+		"https://github.com./a/b", "https://github.com/a/b?url=https://127.0.0.1",
+		"https://github.com/a/b#fragment", "https://github.com/a/%2e%2e", "https://github.com/a/b/extra",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			im := newImporter(t, "")
+			called := false
+			im.Clone = func(context.Context, string, string) error { called = true; return ErrClone }
+			_, err := im.Import(context.Background(), Source{GitURL: raw})
+			if !errors.Is(err, ErrBadURL) || called {
+				t.Fatalf("unsafe URL reached cloner=%v; err=%v", called, err)
+			}
+		})
+	}
+}
 
 func TestImportExample(t *testing.T) {
 	im := newImporter(t, "")
@@ -321,7 +342,7 @@ func TestGitCloneFailsFast(t *testing.T) {
 
 func TestUserMessages(t *testing.T) {
 	latin := regexp.MustCompile(`[A-Za-z]{4,}`)
-	technical := regexp.MustCompile(`https|require|test`) // допустимые технические термины
+	technical := regexp.MustCompile(`https|github|require|test`) // допустимые технические термины
 	errs := []error{ErrBadURL, ErrClone, ErrNoGoMod, ErrExternalDeps, ErrNoTests, ErrTooLarge, ErrGoTooNew, ErrUnknownExample}
 	for _, e := range errs {
 		m := UserMessage(e)

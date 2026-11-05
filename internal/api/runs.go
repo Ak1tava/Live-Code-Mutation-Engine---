@@ -104,6 +104,10 @@ func (s *Server) requestFinishLocked(ctx context.Context, id string, rt *session
 		return changed, nil
 	}
 	err := s.startRunLocked(ctx, id, rt, true)
+	if errors.Is(err, errOverloaded) {
+		// The persisted request freezes edits; Tick retries without a waiting goroutine.
+		return changed, nil
+	}
 	return changed || err == nil, err
 }
 
@@ -129,6 +133,10 @@ func (s *Server) startRunLocked(ctx context.Context, id string, rt *sessionRunti
 				return
 			}
 		}
+		if !s.acquireWorker() {
+			err = errOverloaded
+			return
+		}
 		job.number = len(v.Runs) + 1
 		job.files = v.RunFiles()
 		for path, content := range job.files {
@@ -145,6 +153,7 @@ func (s *Server) startRunLocked(ctx context.Context, id string, rt *sessionRunti
 
 func (s *Server) execute(ctx context.Context, rt *sessionRuntime, job runJob) {
 	result := s.runTests(ctx, job)
+	s.releaseWorker()
 
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
