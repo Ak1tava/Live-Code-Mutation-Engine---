@@ -6,3 +6,6 @@ web/dist/*
 web/node_modules/
 .env
 .superpowers/
+
+# Local presentation and submission materials; keep the repository code-focused.
+/docs/

@@ -136,8 +136,6 @@ ngrok http 8080               # постоянный домен вида https:/
 
 Впишите этот адрес в `LCME_PUBLIC_URL` в `.env` и перезапустите `make run`: по нему строятся ссылки и QR-код для студента. Для временного демо без аккаунта можно использовать `cloudflared tunnel --url http://127.0.0.1:8080`; адрес `trycloudflare.com` меняется при перезапуске туннеля и не является постоянным хостингом.
 
-Сценарий защиты и эксплуатационные ограничения: [демо](docs/demo.md), [питч и вопросы](docs/pitch.md), [PDF](docs/presentation/Mutagen.pdf), [PowerPoint](docs/presentation/Mutagen.pptx), [сдача](docs/submission.md).
-
 ### Тесты
 
 ```bash
