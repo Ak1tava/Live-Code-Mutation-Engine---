@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,16 +33,20 @@ func OpenStore(dir string) (*Store, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
+		// A single bad file must not stop the server: skip it and log why.
 		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
-			return nil, err
+			log.Printf("audit: skipping %s: %v", e.Name(), err)
+			continue
 		}
 		var s Session
 		if err := json.Unmarshal(b, &s); err != nil {
-			return nil, fmt.Errorf("audit: load %s: %w", e.Name(), err)
+			log.Printf("audit: skipping %s: bad JSON: %v", e.Name(), err)
+			continue
 		}
 		if s.ID+".json" != e.Name() {
-			return nil, fmt.Errorf("audit: load %s: id mismatch", e.Name())
+			log.Printf("audit: skipping %s: session id %q does not match file name", e.Name(), s.ID)
+			continue
 		}
 		if s.Plan != nil {
 			s.Plan.Mutated = s.Mutated // Plan.Mutated is json:"-"

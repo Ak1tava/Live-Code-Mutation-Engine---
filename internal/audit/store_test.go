@@ -170,6 +170,35 @@ func TestOpenStoreIgnoresJunk(t *testing.T) {
 	}
 }
 
+func TestOpenStoreSkipsBadFiles(t *testing.T) {
+	dir := t.TempDir()
+	st, _ := OpenStore(dir)
+	s := readySession(t)
+	if err := st.Create(s); err != nil {
+		t.Fatal(err)
+	}
+	good, err := os.ReadFile(filepath.Join(dir, s.ID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// bad JSON, and a hand-copied backup whose name does not match its id
+	_ = os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{not json"), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, s.ID+" (1).json"), good, 0o600)
+
+	st2, err := OpenStore(dir)
+	if err != nil {
+		t.Fatalf("OpenStore must skip bad files: %v", err)
+	}
+	if ids := st2.IDs(); len(ids) != 1 || ids[0] != s.ID {
+		t.Fatalf("IDs = %v, want only %s", ids, s.ID)
+	}
+	for _, n := range []string{"broken.json", s.ID + " (1).json"} {
+		if _, err := os.Stat(filepath.Join(dir, n)); err != nil {
+			t.Errorf("%s must stay on disk: %v", n, err)
+		}
+	}
+}
+
 func TestCreateRejectsUnsafeID(t *testing.T) {
 	st, _ := OpenStore(t.TempDir())
 	s := readySession(t)
