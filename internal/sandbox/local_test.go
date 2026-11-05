@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -258,4 +259,107 @@ func TestParseResultsLimit(t *testing.T) {
 	if _, err := ParseResults(strings.NewReader(in), 10); err == nil {
 		t.Error("limit not enforced")
 	}
+}
+
+func tinyProject(testSrc, extraSrc string) map[string][]byte {
+	return map[string][]byte{
+		"go.mod":       []byte("module tiny\n\ngo 1.22\n"),
+		"tiny.go":      []byte("package tiny\n" + extraSrc),
+		"tiny_test.go": []byte("package tiny\n\n" + testSrc),
+	}
+}
+
+func TestLocalDurationRecorded(t *testing.T) {
+	r := runOne(t, variant(t, textkit(t)))
+	if r.DurationMs <= 0 {
+		t.Errorf("DurationMs = %d", r.DurationMs)
+	}
+}
+
+func TestLocalInitHangBounded(t *testing.T) {
+	// init lives in the non-test package file, so the test binary hangs while listing.
+	files := tinyProject("import \"testing\"\n\nfunc TestX(t *testing.T) {}\n", "\nfunc init() {\n\tfor {\n\t}\n}\n")
+	start := time.Now()
+	r := runOne(t, variant(t, files))
+	if r.BuildError != "" {
+		t.Fatalf("BuildError: %s", r.BuildError)
+	}
+	if len(r.Tests) != 1 || r.Tests[0].Status != StatusTimeout || r.Tests[0].Name != "(init)" {
+		t.Fatalf("tests = %+v", r.Tests)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("Run took %v", d)
+	}
+}
+
+func TestFilterEnv(t *testing.T) {
+	got := FilterEnv([]string{"PATH=/bin", "OPENROUTER_API_KEY=k", "LCME_TOKEN=x", "HOME=/h"})
+	joined := strings.Join(got, "\n")
+	for _, bad := range []string{"OPENROUTER_API_KEY", "LCME_TOKEN"} {
+		if strings.Contains(joined, bad) {
+			t.Errorf("%s leaked: %v", bad, got)
+		}
+	}
+	for _, want := range []string{"PATH=/bin", "HOME=/h", "GOTOOLCHAIN=local", "GOPROXY=off", "GOFLAGS=-mod=readonly"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %s: %v", want, got)
+		}
+	}
+}
+
+func TestLocalHidesSecrets(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-secret")
+	t.Setenv("LCME_SECRET", "s")
+	files := tinyProject(`import (
+	"os"
+	"testing"
+)
+
+func TestEnv(t *testing.T) {
+	if os.Getenv("OPENROUTER_API_KEY") != "" || os.Getenv("LCME_SECRET") != "" {
+		t.Fatal("secret visible")
+	}
+}
+`, "")
+	r := runOne(t, variant(t, files))
+	if r.BuildError != "" || len(r.Tests) != 1 || r.Tests[0].Status != StatusPass {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestLocalKillsBackgroundProcess(t *testing.T) {
+	files := tinyProject(`import (
+	"os"
+	"os/exec"
+	"strconv"
+	"testing"
+)
+
+func TestSpawn(t *testing.T) {
+	c := exec.Command("sleep", "60")
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile("../pid", []byte(strconv.Itoa(c.Process.Pid)), 0o644)
+}
+`, "")
+	b := variant(t, files)
+	r := runOne(t, b)
+	if len(r.Tests) != 1 || r.Tests[0].Status != StatusPass {
+		t.Fatalf("%+v", r)
+	}
+	data, err := os.ReadFile(filepath.Join(b.Dir, "pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pid int
+	fmt.Sscan(string(data), &pid)
+	for i := 0; i < 40; i++ {
+		if syscall.Kill(pid, 0) != nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	syscall.Kill(pid, syscall.SIGKILL)
+	t.Error("background process survived")
 }

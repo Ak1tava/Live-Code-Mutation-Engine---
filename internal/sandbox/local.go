@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -29,7 +28,8 @@ func (l *Local) Run(ctx context.Context, b Batch) ([]VariantResult, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, l.runnerBin, "-dir", b.Dir, "-ids", strings.Join(b.IDs, ","))
-	cmd.Env = append(os.Environ(), Env...)
+	cmd.Env = SandboxEnv()
+	SetProcessGroup(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()

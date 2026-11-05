@@ -22,6 +22,10 @@ import (
 
 const (
 	buildTimeout = 60 * time.Second
+	// listTimeout bounds the -test.list step, which runs student init code.
+	listTimeout = 5 * time.Second
+	// listTailSize is how much of the listing output is kept.
+	listTailSize = 1 << 20
 	// tailSize is how much trailing output is kept for marker detection.
 	tailSize = 64 * 1024
 )
@@ -81,9 +85,9 @@ func capOutput(b []byte) string {
 	return strings.ToValidUTF8(string(b), "")
 }
 
-func runVariant(dir, id, tmp string, testTimeout time.Duration) sandbox.VariantResult {
+func runVariant(dir, id, tmp string, testTimeout time.Duration) (res sandbox.VariantResult) {
 	start := time.Now()
-	res := sandbox.VariantResult{ID: id, Tests: []sandbox.TestResult{}}
+	res = sandbox.VariantResult{ID: id, Tests: []sandbox.TestResult{}}
 	defer func() { res.DurationMs = time.Since(start).Milliseconds() }()
 
 	pkgs, err := testPackages(dir)
@@ -106,11 +110,10 @@ func runVariant(dir, id, tmp string, testTimeout time.Duration) sandbox.VariantR
 			res.Tests = []sandbox.TestResult{}
 			return res
 		}
-		names, err := listTests(dir, pkg, bin)
-		if err != nil {
-			res.BuildError = capOutput([]byte(err.Error()))
-			res.Tests = []sandbox.TestResult{}
-			return res
+		names, failed := listTests(dir, pkg, bin)
+		if failed != nil {
+			res.Tests = append(res.Tests, *failed)
+			continue
 		}
 		for _, name := range names {
 			res.Tests = append(res.Tests, runTest(dir, pkg, bin, name, testTimeout))
@@ -159,22 +162,37 @@ func goBuild(dir, pkg, bin string) ([]byte, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "test", "-c", "-o", bin, "./"+pkg)
 	cmd.Dir = dir
-	cmd.WaitDelay = time.Second
+	sandbox.SetProcessGroup(cmd)
 	t := &tail{n: sandbox.OutputCap}
 	cmd.Stdout, cmd.Stderr = t, t
 	err := cmd.Run()
+	sandbox.KillGroup(cmd)
 	return t.bytes(), err
 }
 
-func listTests(dir, pkg, bin string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
+// listTests asks the test binary for its test names. The binary runs student
+// code (init, TestMain), so it is bounded by listTimeout; if listing fails or
+// hangs, a synthetic "(init)" result is returned instead of names.
+func listTests(dir, pkg, bin string) ([]string, *sandbox.TestResult) {
+	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "-test.list", "^Test")
 	cmd.Dir = filepath.Join(dir, filepath.FromSlash(pkg))
-	cmd.WaitDelay = time.Second
-	out, err := cmd.Output()
+	sandbox.SetProcessGroup(cmd)
+	t := &tail{n: listTailSize}
+	cmd.Stdout, cmd.Stderr = t, t
+	err := cmd.Run()
+	sandbox.KillGroup(cmd)
+	out := t.bytes()
 	if err != nil {
-		return nil, fmt.Errorf("list tests in %s: %w", pkg, err)
+		tr := &sandbox.TestResult{Pkg: pkg, Name: "(init)", Output: capOutput(out)}
+		if ctx.Err() != nil {
+			tr.Status = sandbox.StatusTimeout
+		} else {
+			tr.Status = sandbox.StatusFail
+			tr.Panicked = bytes.Contains(out, []byte("panic: "))
+		}
+		return nil, tr
 	}
 	var names []string
 	for _, line := range strings.Split(string(out), "\n") {
@@ -192,10 +210,11 @@ func runTest(dir, pkg, bin, name string, testTimeout time.Duration) sandbox.Test
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "-test.run", "^"+name+"$", "-test.count", "1", "-test.timeout", testTimeout.String())
 	cmd.Dir = filepath.Join(dir, filepath.FromSlash(pkg))
-	cmd.WaitDelay = time.Second
+	sandbox.SetProcessGroup(cmd)
 	t := &tail{n: tailSize}
 	cmd.Stdout, cmd.Stderr = t, t
 	err := cmd.Run()
+	sandbox.KillGroup(cmd)
 	out := t.bytes()
 	timedOut := ctx.Err() != nil || bytes.Contains(out, []byte("panic: test timed out"))
 	switch {
