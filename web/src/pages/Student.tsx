@@ -8,6 +8,7 @@ import { Alert, Connection, Header, Loading, SessionProblem } from '../component
 import { TestResults } from '../components/TestResults'
 import { Timer } from '../components/Timer'
 import { SaveQueue } from '../saveQueue'
+import { isRunPending, type PendingRun } from '../sessionState'
 import { useCountdown } from '../timer'
 import type { EventKind, StudentView } from '../types'
 import { useSession } from '../ws'
@@ -23,19 +24,22 @@ export default function StudentRoute() {
 
 function Student({ tok }: { tok: string }) {
   const [, render] = useReducer(count => count + 1, 0)
-  const queue = useMemo(() => new SaveQueue(render), [])
-  const { view, connected, send, error: wireError, clearError, fatal } = useSession<StudentView>(tok, 's', {
+  const reconnectQueue = useRef<() => void>()
+  const queue = useMemo(() => new SaveQueue(render, () => reconnectQueue.current?.()), [])
+  const { view, connected, send, reconnect, snapshotVersion, getSnapshotVersion, error: wireError, clearError, fatal } = useSession<StudentView>(tok, 's', {
     snapshot: (snapshot, write) => queue.snapshot(snapshot.files ?? {}, snapshot.state === 'running' && !snapshot.finishing ? write : undefined),
     ack: ack => queue.ack(ack),
     reject: (path, message, revision) => queue.reject(path, message, revision),
     disconnected: () => queue.disconnect(),
   })
+  reconnectQueue.current = reconnect
   const seconds = useCountdown(view?.deadline, view?.serverNow)
   const active = view?.state === 'running' && !view.finishing && seconds > 0
   const [error, setError] = useState('')
   const [command, setCommand] = useState<Command | null>(null)
   const executing = useRef(false)
-  const [requestedRun, setRequestedRun] = useState<number | null>(null)
+  const [requestedRun, setRequestedRun] = useState<PendingRun | null>(null)
+  const [confirmFinish, setConfirmFinish] = useState(false)
   const [requestedFinish, setRequestedFinish] = useState(false)
   const [requestedStart, setRequestedStart] = useState(false)
   const [location, setLocation] = useState<Location>()
@@ -46,12 +50,17 @@ function Student({ tok }: { tok: string }) {
   const eventsEnabled = useRef(active && !requestedFinish)
   eventsEnabled.current = active && !requestedFinish
   const latestRunCount = view?.runs?.length ?? 0
-  const running = !!view?.running || (requestedRun !== null && latestRunCount === requestedRun)
+  const pendingRun = isRunPending(requestedRun, latestRunCount, !!view?.running, snapshotVersion)
+  const running = !!view?.running || pendingRun
   const ending = !!view?.finishing || requestedFinish || (view?.state === 'running' && seconds === 0)
 
   useEffect(() => {
-    if (requestedRun !== null && latestRunCount !== requestedRun) setRequestedRun(null)
-  }, [latestRunCount, requestedRun])
+    if (requestedRun && !pendingRun) setRequestedRun(null)
+  }, [pendingRun, requestedRun])
+
+  useEffect(() => {
+    if (connected && active && seconds <= 3 && queue.dirty) void queue.flush().catch(cause => setError(errorText(cause)))
+  }, [active, connected, queue, seconds])
 
   const blocker = useBlocker(({ currentLocation, nextLocation }) =>
     queue.dirty && view?.state === 'running' && currentLocation.pathname !== nextLocation.pathname,
@@ -126,8 +135,9 @@ function Student({ tok }: { tok: string }) {
     if (!connected || !active || ending || running) return
     void perform('run', async () => {
       await queue.flush()
+      const snapshot = getSnapshotVersion()
       await post(`${endpoint}/run`)
-      setRequestedRun(latestRunCount)
+      setRequestedRun({ count: latestRunCount, snapshot })
     })
   }
 
@@ -137,6 +147,7 @@ function Student({ tok }: { tok: string }) {
       await queue.flush()
       await post(`${endpoint}/finish`)
       setRequestedFinish(true)
+      setConfirmFinish(false)
     })
   }
 
@@ -217,11 +228,18 @@ function Student({ tok }: { tok: string }) {
         <button className="button primary" onClick={run} disabled={!connected || !active || ending || running || !!command}>
           {running && !ending ? 'Тесты выполняются…' : 'Запустить тесты'}
         </button>
-        <button className="button secondary" onClick={finish} disabled={!connected || !active || ending || !!command}>
+        <button className="button secondary" onClick={() => setConfirmFinish(true)} disabled={!connected || !active || ending || !!command}>
           {ending ? 'Завершение…' : 'Завершить'}
         </button>
       </div>
     </div>
+    {confirmFinish && !ending && <section className="panel finish-confirm" role="region" aria-label="Подтверждение завершения">
+      <p>Завершить сессию? После этого редактировать код нельзя.</p>
+      <div className="inline-actions">
+        <button className="button primary small" disabled={!connected || !active || !!command} onClick={finish}>Да, завершить</button>
+        <button className="button secondary small" disabled={!!command} onClick={() => setConfirmFinish(false)}>Продолжить работу</button>
+      </div>
+    </section>}
     {!connected && <Alert tone="warning">Связь прервалась. Правки останутся в этой вкладке до переподключения.</Alert>}
     {ending && <Alert tone="warning">Сессия завершается. Готовим отчёт по финальному прогону.</Alert>}
     <Alert>{error || queue.error || wireError}</Alert>
@@ -248,7 +266,7 @@ function Student({ tok }: { tok: string }) {
           <Suspense fallback={<Loading>Загружаем редактор…</Loading>}>
             <CodeEditor key={file} file={file} value={queue.content(file)}
               readOnly={locked || !active || ending || !!command || blocker.state === 'blocked'}
-              onChange={value => { if (!locked && value !== undefined) queue.edit(file, value) }}
+              onChange={value => { if (!locked && value !== undefined) queue.edit(file, value, seconds <= 3) }}
               onMount={mountEditor} />
           </Suspense>
         </div> : <p className="empty">Файлы проекта недоступны.</p>}

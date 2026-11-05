@@ -33,8 +33,9 @@ type studentFlag struct {
 }
 
 type studentReport struct {
-	Restored    bool `json:"restored"`
-	DurationSec int  `json:"durationSec"`
+	VerificationError string `json:"verificationError,omitempty"`
+	Restored          bool   `json:"restored"`
+	DurationSec       int    `json:"durationSec"`
 }
 
 type AuditorView struct {
@@ -59,11 +60,12 @@ type progressView struct {
 }
 
 type statsView struct {
-	Candidates     int `json:"candidates"`
-	Killed         int `json:"killed"`
-	Survived       int `json:"survived"`
-	BuildErrors    int `json:"buildErrors"`
-	TriplesChecked int `json:"triplesChecked"`
+	Candidates         int `json:"candidates"`
+	SelectedCandidates int `json:"selectedCandidates"`
+	Killed             int `json:"killed"`
+	Survived           int `json:"survived"`
+	BuildErrors        int `json:"buildErrors"`
+	TriplesChecked     int `json:"triplesChecked"`
 }
 
 func studentFlagOf(f audit.Flag) studentFlag {
@@ -79,7 +81,7 @@ func addText(dst map[string]string, src map[string][]byte) {
 // newViews copies all view data that may be used after Store.View returns.
 func (s *Server) newViews(v *audit.Session, rt *sessionRuntime, auditor bool) any {
 	now := s.d.Now()
-	finishing := v.State == audit.StateRunning && (!v.FinishRequestedAt.IsZero() || v.Expired(now))
+	finishing := v.State == audit.StateRunning && (!v.FinishRequestedAt.IsZero() || v.Expired(now)) || v.State == audit.StateFinished && rt.active
 	student := StudentView{
 		State: v.State, ServerNow: now, Running: rt.active || finishing, Finishing: finishing,
 		Files: make(map[string]string, len(v.Files)+len(v.Tests)), ReadOnly: make([]string, 0, len(v.Tests)),
@@ -89,10 +91,12 @@ func (s *Server) newViews(v *audit.Session, rt *sessionRuntime, auditor bool) an
 		deadline := v.Deadline
 		student.Deadline = &deadline
 	}
-	addText(student.Files, v.Files)
-	addText(student.Files, v.Tests)
-	for name := range v.Tests {
-		student.ReadOnly = append(student.ReadOnly, name)
+	if auditor || v.State == audit.StateRunning || v.State == audit.StateFinished {
+		addText(student.Files, v.Files)
+		addText(student.Files, v.Tests)
+		for name := range v.Tests {
+			student.ReadOnly = append(student.ReadOnly, name)
+		}
 	}
 	sort.Strings(student.ReadOnly)
 	for i := range student.Runs {
@@ -106,7 +110,7 @@ func (s *Server) newViews(v *audit.Session, rt *sessionRuntime, auditor bool) an
 	if v.State == audit.StateFinished {
 		result := audit.BuildReport(v)
 		report = &result
-		student.Report = &studentReport{Restored: result.Restored, DurationSec: result.DurationSec}
+		student.Report = &studentReport{Restored: result.Restored, DurationSec: result.DurationSec, VerificationError: result.VerificationError}
 	}
 	if !auditor {
 		return student
@@ -133,7 +137,7 @@ func (s *Server) newViews(v *audit.Session, rt *sessionRuntime, auditor bool) an
 		for _, tests := range p.KillingTests {
 			view.KillingTests = append(view.KillingTests, append([]string{}, tests...))
 		}
-		view.Stats = statsView(p.Stats)
+		view.Stats = statsView{Candidates: p.Stats.Candidates, SelectedCandidates: p.Stats.SelectedCandidates, Killed: p.Stats.Killed, Survived: p.Stats.Survived, BuildErrors: p.Stats.BuildErrors, TriplesChecked: p.Stats.TriplesChecked}
 	}
 	return view
 }

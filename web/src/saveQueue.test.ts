@@ -100,6 +100,41 @@ describe('подтверждение автосохранения', () => {
     await rejected
     expect(queue.dirty).toBe(true)
   })
+  it('после таймаута ACK разрывает зависшее соединение и повторяет черновик по новому снимку', async () => {
+    let reconnected = false
+    queue = new SaveQueue(() => {}, () => { reconnected = true })
+    queue.snapshot(snapshot, send)
+    queue.edit(path, 'черновик')
+    const flushed = queue.flush()
+    const rejected = expect(flushed).rejects.toThrow('подтвердил')
+    vi.advanceTimersByTime(10_000)
+    await rejected
+    expect(reconnected).toBe(true)
+    expect(queue.content(path)).toBe('черновик')
+    queue.snapshot(snapshot, send)
+    queue.ack(send.mock.calls.at(-1)![0])
+    expect(queue.dirty).toBe(false)
+  })
+
+  it('отправляет каждую новую правку немедленно у дедлайна, включая правку после ACK', () => {
+    queue.edit(path, 'последняя секунда', true)
+    expect(send.mock.calls.at(-1)?.[0].content).toBe('последняя секунда')
+    queue.ack(send.mock.calls.at(-1)![0])
+    queue.edit(path, 'последние полсекунды', true)
+    expect(send.mock.calls.at(-1)?.[0].content).toBe('последние полсекунды')
+    queue.ack(send.mock.calls.at(-1)![0])
+    expect(queue.dirty).toBe(false)
+  })
+
+  it('отправляет срочную правку после ACK предыдущей версии без нового debounce', () => {
+    queue.edit(path, 'первая')
+    vi.advanceTimersByTime(1000)
+    const first = send.mock.calls[0][0]
+    queue.edit(path, 'срочная', true)
+    expect(send.mock.calls).toHaveLength(1)
+    queue.ack(first)
+    expect(send.mock.calls.at(-1)?.[0].content).toBe('срочная')
+  })
   it('сохраняет подтверждённую основу для офлайн правки после обрыва до снимка', async () => {
     queue.edit(path, 'исправление')
     const flushed = queue.flush()

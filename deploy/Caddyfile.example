@@ -1,0 +1,5 @@
+# Replace the hostname and verify the local application address before use.
+audit.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8080
+}

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/ast"
-	"go/format"
 	"go/parser"
 	"go/token"
 	"os"
@@ -24,7 +23,17 @@ import (
 // discoverAndInstrument reads the build-selected test files without executing
 // project init or TestMain. The Go tool still validates test signatures when
 // compiling. An overlay adds a completion callback without changing /work.
-func discoverAndInstrument(dir, pkg, bin string) ([]string, string, error) {
+type instrumentedTest struct {
+	Name    string
+	RunName string
+}
+
+type sourceEdit struct {
+	start, end int
+	text       string
+}
+
+func discoverAndInstrument(dir, pkg, bin string) ([]instrumentedTest, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "list", "-json", "./"+pkg)
@@ -35,6 +44,9 @@ func discoverAndInstrument(dir, pkg, bin string) ([]string, string, error) {
 	cmd.Stdout, cmd.Stderr = out, errout
 	err := cmd.Run()
 	sandbox.KillGroup(cmd)
+	if ctx.Err() != nil {
+		return nil, "", ctx.Err()
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("discover tests: %w: %s", err, errout.bytes())
 	}
@@ -57,46 +69,62 @@ func discoverAndInstrument(dir, pkg, bin string) ([]string, string, error) {
 	helper := "lcmeCompletion_" + strings.TrimPrefix(filepath.Base(work), "instrument-")
 	replace := map[string]string{}
 	packages := map[string]bool{}
-	seen := map[string]bool{}
-	var names []string
+	seen := map[string]string{}
+	var names []instrumentedTest
 	for i, name := range append(info.TestGoFiles, info.XTestGoFiles...) {
 		path := filepath.Join(info.Dir, name)
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		source, err := os.ReadFile(path)
 		if err != nil {
 			return nil, "", err
 		}
-		changed := false
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, source, parser.ParseComments)
+		if err != nil {
+			return nil, "", err
+		}
+		var edits []sourceEdit
+		offset := func(p token.Pos) int { return fset.PositionFor(p, false).Offset }
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || !isTestFunction(fn) {
 				continue
 			}
-			if seen[fn.Name.Name] {
+			previousPackage, duplicate := seen[fn.Name.Name]
+			if duplicate && previousPackage == file.Name.Name {
 				return nil, "", fmt.Errorf("ambiguous test name %s in package %s", fn.Name.Name, pkg)
 			}
-			seen[fn.Name.Name] = true
-			names = append(names, fn.Name.Name)
-			param := fn.Type.Params.List[0]
-			if len(param.Names) == 0 || param.Names[0].Name == "_" {
-				param.Names = []*ast.Ident{ast.NewIdent(helper + "Arg")}
+			seen[fn.Name.Name] = file.Name.Name
+			target := instrumentedTest{Name: fn.Name.Name, RunName: fn.Name.Name}
+			if duplicate {
+				// Preserve the declaration, references and t.Name(). The helper
+				// skips the other package's duplicate before executing its body.
+				target.Name += " (external)"
 			}
-			call := &ast.ExprStmt{X: &ast.CallExpr{
-				Fun: ast.NewIdent(helper), Args: []ast.Expr{ast.NewIdent(param.Names[0].Name)},
-			}}
-			fn.Body.List = append([]ast.Stmt{call}, fn.Body.List...)
-			changed = true
+			names = append(names, target)
+			param := fn.Type.Params.List[0]
+			arg := helper + "Arg"
+			if len(param.Names) == 0 {
+				edits = append(edits, sourceEdit{offset(param.Type.Pos()), offset(param.Type.Pos()), arg + " "})
+			} else if param.Names[0].Name == "_" {
+				edits = append(edits, sourceEdit{offset(param.Names[0].Pos()), offset(param.Names[0].End()), arg})
+			} else {
+				arg = param.Names[0].Name
+			}
+			// Same-line insertion preserves physical source lines, comments and
+			// line directives. Formatting the AST would shift diagnostic lines.
+			at := offset(fn.Body.Lbrace) + 1
+			edits = append(edits, sourceEdit{at, at, helper + "(" + arg + "," + strconv.Quote(target.RunName) + "," + strconv.Quote(target.Name) + ");"})
 		}
-		if !changed {
+		if len(edits) == 0 {
 			continue
 		}
 		packages[file.Name.Name] = true
-		var src bytes.Buffer
-		if err := format.Node(&src, fset, file); err != nil {
-			return nil, "", err
+		sort.Slice(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
+		for _, edit := range edits {
+			source = append(append(append([]byte{}, source[:edit.start]...), edit.text...), source[edit.end:]...)
 		}
 		backing := filepath.Join(work, strconv.Itoa(i)+".go")
-		if err := os.WriteFile(backing, src.Bytes(), 0600); err != nil {
+		if err := os.WriteFile(backing, source, 0600); err != nil {
 			return nil, "", err
 		}
 		replace[path] = backing
@@ -107,7 +135,7 @@ func discoverAndInstrument(dir, pkg, bin string) ([]string, string, error) {
 		if err := os.WriteFile(backing, []byte(src), 0600); err != nil {
 			return nil, "", err
 		}
-		replace[filepath.Join(info.Dir, helper+"_"+pkgName+"_test.go")] = backing
+		replace[filepath.Join(info.Dir, helper+"_"+pkgName+"_completion_test.go")] = backing
 	}
 	data, err := json.Marshal(struct{ Replace map[string]string }{replace})
 	if err != nil {
@@ -117,7 +145,7 @@ func discoverAndInstrument(dir, pkg, bin string) ([]string, string, error) {
 	if err := os.WriteFile(overlay, data, 0600); err != nil {
 		return nil, "", err
 	}
-	sort.Strings(names)
+	sort.Slice(names, func(i, j int) bool { return names[i].Name < names[j].Name })
 	return names, overlay, nil
 }
 
@@ -167,7 +195,13 @@ import (
  lcmeTesting "testing"
 )
 var %[2]sFile = lcmeOS.NewFile(3, "lcme-completion")
-func %[2]s(t *lcmeTesting.T) {
+func %[2]s(t *lcmeTesting.T, name, key string) {
+ // A direct call of another test function is part of the current test, not
+ // another top-level execution or completion record.
+ if t.Name() != name { return }
+ if lcmeOS.Getenv("LCME_TEST_TARGET") != key {
+  t.Skip("lcme: this test belongs to the other test package")
+ }
  t.Cleanup(func() {
   f := %[2]sFile
   if f == nil { return }

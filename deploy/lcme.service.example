@@ -1,0 +1,21 @@
+[Unit]
+Description=Live Code Mutation Engine
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+User=lcme
+Group=lcme
+SupplementaryGroups=docker
+WorkingDirectory=/opt/lcme
+EnvironmentFile=/etc/lcme.env
+UMask=0022
+PrivateTmp=no
+ExecStart=/opt/lcme/bin/lcme
+Restart=always
+RestartSec=5s
+TimeoutStopSec=20s
+
+[Install]
+WantedBy=multi-user.target

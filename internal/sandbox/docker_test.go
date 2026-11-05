@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,7 +14,12 @@ import (
 	"lcme/internal/mutate"
 )
 
-const testImage = "lcme-runner:latest"
+var testImage = func() string {
+	if image := os.Getenv("LCME_TEST_RUNNER_IMAGE"); image != "" {
+		return image
+	}
+	return "lcme-runner:latest"
+}()
 
 func dockerRunner(t *testing.T) *Docker {
 	t.Helper()
@@ -271,8 +277,31 @@ func TestDockerTimeoutKillsContainer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s := strings.TrimSpace(string(out)); s != "" {
-		t.Errorf("containers still running: %s", s)
+	for _, id := range strings.Fields(string(out)) {
+		// Other audits may be running on the same daemon. Only this test's
+		// uniquely staged batch belongs to the cancelled operation.
+		data, err := exec.Command("docker", "inspect", id).CombinedOutput()
+		if err != nil {
+			if strings.Contains(string(data), "No such object") || strings.Contains(string(data), "No such container") {
+				continue
+			}
+			t.Fatalf("inspect container: %v: %s", err, data)
+		} // A concurrently completed container was removed.
+		var containers []struct{ Mounts []struct{ Source string } }
+		if err := json.Unmarshal(data, &containers); err != nil {
+			t.Fatal(err)
+		}
+		batchDir, err := filepath.Abs(b.Dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, container := range containers {
+			for _, mount := range container.Mounts {
+				if mount.Source == batchDir {
+					t.Errorf("cancelled batch container still running: %s", id)
+				}
+			}
+		}
 	}
 }
 

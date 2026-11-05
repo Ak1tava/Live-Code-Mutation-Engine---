@@ -21,8 +21,9 @@ export function TestResults({ run, running }: { run?: RunView; running: boolean 
     </div>
     {running && <Loading>Выполняем тесты…</Loading>}
     {!run && !running && <p className="empty">Запустите тесты, чтобы увидеть, какие сценарии проходят.</p>}
+    {run?.result.infrastructureError && <div className="build-error"><strong>Проверка недоступна</strong><pre>{run.result.infrastructureError}</pre></div>}
     {run?.result.buildError && <div className="build-error"><strong>Ошибка сборки или запуска</strong><pre>{run.result.buildError}</pre></div>}
-    {run && !run.result.buildError && !counts.total && <p className="empty">Прогон завершился без результатов тестов.</p>}
+    {run && !run.result.buildError && !run.result.infrastructureError && !counts.total && <p className="empty">Прогон завершился без результатов тестов.</p>}
     {(run?.result.tests ?? []).map(test => <details className="test-line" key={`${test.pkg}:${test.name}`}>
       <summary>
         <code>{test.pkg !== '.' && `${test.pkg}/`}{test.name}</code>

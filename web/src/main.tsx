@@ -14,10 +14,18 @@ function loading(children: ReactNode) {
   </Suspense>
 }
 
+function RouteError() {
+  return <><Header /><main className="narrow page"><section className="panel stage-card">
+    <h1>Не удалось загрузить страницу</h1>
+    <p>Проверьте соединение и обновите страницу. Состояние сессии хранится на сервере.</p>
+    <button className="button primary" onClick={() => window.location.reload()}>Обновить страницу</button>
+  </section></main></>
+}
+
 const router = createBrowserRouter([
-  { path: '/', element: <Home /> },
-  { path: '/a/:tok', element: loading(<Auditor />) },
-  { path: '/s/:tok', element: loading(<Student />) },
+  { path: '/', element: <Home />, errorElement: <RouteError /> },
+  { path: '/a/:tok', element: loading(<Auditor />), errorElement: <RouteError /> },
+  { path: '/s/:tok', element: loading(<Student />), errorElement: <RouteError /> },
   { path: '*', element: <><Header /><SessionProblem message="Проверьте адрес страницы." /></> },
 ])
 

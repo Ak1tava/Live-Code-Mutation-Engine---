@@ -42,7 +42,7 @@ func Score(c Candidate) int {
 // no variant failed to build.
 func Independent(r [8]sandbox.VariantResult, tests []string) (killing [3][]string, ok bool) {
 	for _, v := range r {
-		if v.BuildError != "" {
+		if v.BuildError != "" || v.InfrastructureError != "" {
 			return killing, false
 		}
 		have := make(map[string]bool, len(v.Tests))

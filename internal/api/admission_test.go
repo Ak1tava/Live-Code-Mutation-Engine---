@@ -96,14 +96,13 @@ func TestPreparationAdmissionAndErrorRelease(t *testing.T) {
 			return nil, ctx.Err()
 		}
 	}, nil)
-	a, b := f.create(), f.create()
+	a := f.create()
 	for range 12 {
 		f.request("POST", "/api/audits", `{"example":"textkit"}`, http.StatusTooManyRequests)
 	}
-	assertSessionCount(t, f, 2)
+	assertSessionCount(t, f, 1)
 	once.Do(func() { close(release) })
 	f.wait(a, "failed")
-	f.wait(b, "failed")
 	f.wait(f.create(), "failed")
 }
 
@@ -336,7 +335,7 @@ func TestSessionAdmissionCapIsAtomicAndPersistsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	restarted := api.New(api.Deps{Store: reopened})
+	restarted := api.New(api.Deps{Store: reopened, Now: f.now, Importer: &project.Importer{ExamplesDir: "../../examples"}})
 	w := httptest.NewRecorder()
 	restarted.Handler().ServeHTTP(w, httptest.NewRequest("POST", "/api/audits", strings.NewReader(`{"example":"textkit"}`)))
 	if w.Code != http.StatusServiceUnavailable {

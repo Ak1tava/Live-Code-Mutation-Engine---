@@ -68,7 +68,7 @@ export function CodeDiff({ file, original, modified, lines }: {
     loading={<Loading>Загружаем сравнение…</Loading>}
     options={{
       ...options, readOnly: true, originalEditable: false, renderSideBySide: true,
-      useInlineViewWhenSpaceIsLimited: true, originalAriaLabel: 'Выданный код', modifiedAriaLabel: 'Код студента',
+      useInlineViewWhenSpaceIsLimited: false, originalAriaLabel: 'Выданный код', modifiedAriaLabel: 'Код студента',
     }}
     onMount={editor => {
       instance.current = editor

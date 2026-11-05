@@ -38,8 +38,16 @@ type serverMessage struct {
 }
 
 func (s *Server) websocket(w http.ResponseWriter, r *http.Request, id string, role audit.Role) {
+	rt := s.runtime(id)
+	rt.mu.Lock()
+	if len(rt.peers) >= 8 {
+		rt.mu.Unlock()
+		writeError(w, http.StatusTooManyRequests, "Достигнут лимит: 8 подключений к сессии. Закройте лишние вкладки.")
+		return
+	}
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
+		rt.mu.Unlock()
 		return
 	}
 	// JSON can encode one byte of file content as six bytes of escapes.
@@ -48,9 +56,7 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request, id string, ro
 	defer conn.CloseNow()
 	defer cancel()
 
-	rt := s.runtime(id)
 	p := &peer{role: role, send: make(chan []byte, 8), cancel: cancel}
-	rt.mu.Lock()
 	rt.peers[p] = struct{}{}
 	s.d.Store.View(id, func(v *audit.Session) {
 		p.enqueue(encode(serverMessage{Type: "snapshot", View: s.newViews(v, rt, role == audit.RoleAuditor)}))
@@ -188,17 +194,22 @@ func (p *peer) enqueue(data []byte) {
 
 func (p *peer) write(ctx context.Context, conn *websocket.Conn) {
 	defer p.cancel()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
 	for {
+		var msg []byte
 		select {
 		case <-ctx.Done():
 			return
-		case msg := <-p.send:
-			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := conn.Write(writeCtx, websocket.MessageText, msg)
-			cancel()
-			if err != nil {
-				return
-			}
+		case msg = <-p.send:
+		case <-ticker.C:
+			msg = encode(serverMessage{Type: "ping"})
+		}
+		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := conn.Write(writeCtx, websocket.MessageText, msg)
+		cancel()
+		if err != nil {
+			return
 		}
 	}
 }

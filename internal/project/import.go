@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/version"
 	"io/fs"
 	"net/url"
 	"os"
@@ -12,7 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -142,6 +142,19 @@ func (im *Importer) Import(ctx context.Context, src Source) (*Project, error) {
 		root = tmp
 	}
 	return im.load(root, src, lim)
+}
+
+// ValidateSource rejects invalid sources before allocating a retained session.
+// It checks syntax and local demo existence without cloning or executing code.
+func (im *Importer) ValidateSource(src Source) error {
+	if (src.Example == "") == (src.GitURL == "") {
+		return ErrBadURL
+	}
+	if src.Example != "" {
+		_, err := im.exampleDir(src.Example)
+		return err
+	}
+	return checkURL(src.GitURL)
 }
 
 func checkURL(raw string) error {
@@ -288,33 +301,8 @@ func parseGoMod(s string) (module, goVer string, hasRequire bool) {
 	return
 }
 
-// versionLess сравнивает major.minor как числа; нечитаемая версия считается слишком новой.
+// versionLess includes the patch release required by the Go directive.
 func versionLess(a, b string) bool {
-	am, an, ok1 := majorMinor(a)
-	bm, bn, ok2 := majorMinor(b)
-	if !ok1 || !ok2 {
-		return true
-	}
-	return am < bm || (am == bm && an < bn)
-}
-
-func majorMinor(v string) (int, int, bool) {
-	parts := strings.SplitN(v, ".", 3)
-	if len(parts) < 2 {
-		return 0, 0, false
-	}
-	maj, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, 0, false
-	}
-	minor := parts[1]
-	end := 0
-	for end < len(minor) && minor[end] >= '0' && minor[end] <= '9' {
-		end++
-	}
-	min, err := strconv.Atoi(minor[:end])
-	if err != nil {
-		return 0, 0, false
-	}
-	return maj, min, true
+	a, b = "go"+strings.TrimPrefix(a, "go"), "go"+strings.TrimPrefix(b, "go")
+	return !version.IsValid(a) || !version.IsValid(b) || version.Compare(a, b) < 0
 }

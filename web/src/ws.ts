@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, request } from './api'
 import type { FileAck } from './saveQueue'
+import { watchConnection } from './sessionState'
 
 type FileEvent = { path: string; content: string }
 type Message<V> =
@@ -8,6 +9,7 @@ type Message<V> =
   | ({ type: 'file' } & FileEvent)
   | ({ type: 'fileAck' } & FileAck)
   | { type: 'error'; message: string; path?: string; revision?: number }
+  | { type: 'ping' }
 
 interface Observer<V> {
   snapshot?: (view: V, send: (msg: object) => boolean) => void
@@ -28,7 +30,10 @@ export function useSession<V extends { files: Record<string, string> }>(
   const [fatal, setFatal] = useState('')
   const [error, setError] = useState('')
   const [lastFile, setLastFile] = useState<FileEvent>()
+  const [snapshotVersion, setSnapshotVersion] = useState(0)
+  const version = useRef(0)
   const wire = useRef<WebSocket>()
+  const recover = useRef<() => void>()
   const ready = useRef(false)
   const callbacks = useRef(observer)
   callbacks.current = observer
@@ -40,10 +45,12 @@ export function useSession<V extends { files: Record<string, string> }>(
       socket.send(JSON.stringify(message))
       return true
     } catch {
-      socket.close()
+      recover.current?.()
       return false
     }
   }, [])
+  const reconnect = useCallback(() => recover.current?.(), [])
+  const getSnapshotVersion = useCallback(() => version.current, [])
 
   useEffect(() => {
     const token = encodeURIComponent(tok)
@@ -52,17 +59,24 @@ export function useSession<V extends { files: Record<string, string> }>(
     const lifetime = new AbortController()
     let retry: number | undefined
     let attempt = 0
-    let receivedSnapshot = false
     let diagnosing = false
     let terminal = false
     let handshake: number | undefined
+    let heartbeat: ReturnType<typeof watchConnection> | undefined
 
     function connect() {
       if (terminal || lifetime.signal.aborted) return
+      let receivedSnapshot = false
       const socket = new WebSocket(url)
       wire.current = socket
       ready.current = false
-      handshake = window.setTimeout(() => socket.close(), 15_000)
+      function close() {
+        socket.close()
+        disconnected()
+      }
+      recover.current = close
+      handshake = window.setTimeout(close, 15_000)
+      heartbeat = watchConnection(close)
       socket.onmessage = event => {
         if (wire.current !== socket || lifetime.signal.aborted) return
         let message: Message<V>
@@ -72,12 +86,14 @@ export function useSession<V extends { files: Record<string, string> }>(
           setError('Сервер отправил непонятный ответ.')
           return
         }
+        heartbeat?.received()
         if (message.type === 'snapshot') {
           window.clearTimeout(handshake)
           receivedSnapshot = true
           attempt = 0
           ready.current = true
           setView(message.view)
+          setSnapshotVersion(++version.current)
           setConnected(true)
           callbacks.current?.snapshot?.(message.view, send)
         } else if (message.type === 'file') {
@@ -94,9 +110,12 @@ export function useSession<V extends { files: Record<string, string> }>(
           }
         }
       }
-      socket.onclose = () => {
+      function disconnected() {
         if (wire.current !== socket || lifetime.signal.aborted) return
+        wire.current = undefined
+        recover.current = undefined
         window.clearTimeout(handshake)
+        heartbeat?.dispose()
         ready.current = false
         setConnected(false)
         callbacks.current?.disconnected?.()
@@ -112,19 +131,20 @@ export function useSession<V extends { files: Record<string, string> }>(
             }
           }).finally(() => { diagnosing = false })
         }
-        retry = window.setTimeout(connect, delays[Math.min(attempt++, delays.length - 1)])
+        if (!terminal) retry = window.setTimeout(connect, delays[Math.min(attempt++, delays.length - 1)])
       }
+      socket.onclose = disconnected
     }
 
     function onOnline() {
-      if (!terminal && wire.current?.readyState === WebSocket.CLOSED) {
+      if (!terminal && (!wire.current || wire.current.readyState === WebSocket.CLOSED)) {
         window.clearTimeout(retry)
         connect()
       }
     }
 
     function onOffline() {
-      wire.current?.close()
+      recover.current?.()
     }
 
     setView(null)
@@ -139,6 +159,8 @@ export function useSession<V extends { files: Record<string, string> }>(
       ready.current = false
       window.clearTimeout(retry)
       window.clearTimeout(handshake)
+      heartbeat?.dispose()
+      recover.current = undefined
       window.removeEventListener('online', onOnline)
       window.removeEventListener('offline', onOffline)
       const socket = wire.current
@@ -152,5 +174,5 @@ export function useSession<V extends { files: Record<string, string> }>(
     }
   }, [role, send, tok])
 
-  return { view, connected, send, lastFile, fatal, error, clearError: () => setError('') }
+  return { view, connected, send, reconnect, snapshotVersion, getSnapshotVersion, lastFile, fatal, error, clearError: () => setError('') }
 }

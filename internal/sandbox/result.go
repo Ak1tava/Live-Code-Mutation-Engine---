@@ -42,14 +42,18 @@ func (t TestResult) Key() string { return t.Pkg + ":" + t.Name }
 
 // VariantResult is the outcome of running all tests of one variant.
 type VariantResult struct {
-	ID         string       `json:"id"`
-	BuildError string       `json:"buildError"`
-	Tests      []TestResult `json:"tests"`
-	DurationMs int64        `json:"durationMs"`
+	ID                  string       `json:"id"`
+	BuildError          string       `json:"buildError"`
+	InfrastructureError string       `json:"infrastructureError,omitempty"`
+	Tests               []TestResult `json:"tests"`
+	DurationMs          int64        `json:"durationMs"`
 }
 
 // Passed reports whether the test with the given key ran and passed.
 func (v VariantResult) Passed(key string) bool {
+	if v.InfrastructureError != "" || v.BuildError != "" {
+		return false
+	}
 	for _, t := range v.Tests {
 		if t.Key() == key {
 			return t.Status == StatusPass
@@ -60,6 +64,9 @@ func (v VariantResult) Passed(key string) bool {
 
 // AllPassed reports whether every key passed.
 func (v VariantResult) AllPassed(keys []string) bool {
+	if v.InfrastructureError != "" || v.BuildError != "" {
+		return false
+	}
 	for _, k := range keys {
 		if !v.Passed(k) {
 			return false

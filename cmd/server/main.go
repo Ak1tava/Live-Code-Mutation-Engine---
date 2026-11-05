@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"io/fs"
 	"log"
@@ -61,7 +63,11 @@ func run() error {
 	server := api.New(api.Deps{
 		Store: store, Importer: &project.Importer{ExamplesDir: "examples", WorkDir: c.workDir, MaxGo: strings.TrimPrefix(version, "go")}, Runner: runner,
 		Prepare: func(ctx context.Context, p *project.Project, cb func(selector.Progress)) (*selector.Plan, error) {
-			return selector.Prepare(ctx, p.Files, p.GoFiles(), runner, c.workDir, selector.DefaultOptions, cb)
+			opt, err := sessionSelectionOptions()
+			if err != nil {
+				return nil, err
+			}
+			return selector.Prepare(ctx, p.Files, p.GoFiles(), runner, c.workDir, opt, cb)
 		},
 		Hinter: hinter, WorkDir: c.workDir, PublicURL: c.publicURL, Static: static, AllowGitImport: c.mode == "docker",
 	})
@@ -89,4 +95,16 @@ func run() error {
 			return httpServer.Shutdown(shutdown)
 		}
 	}
+}
+
+func sessionSelectionOptions() (selector.Options, error) {
+	opt := selector.DefaultOptions
+	var seed [8]byte
+	for opt.Seed == 0 {
+		if _, err := rand.Read(seed[:]); err != nil {
+			return opt, err
+		}
+		opt.Seed = int64(binary.LittleEndian.Uint64(seed[:]))
+	}
+	return opt, nil
 }

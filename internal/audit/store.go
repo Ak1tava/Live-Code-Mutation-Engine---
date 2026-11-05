@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Store keeps sessions in memory and mirrors each one to <dir>/<id>.json.
@@ -210,4 +211,44 @@ func (st *Store) IDs() []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// Expire removes only inactive sessions whose retention period elapsed. The
+// caller serializes this operation with per-session operations and active jobs.
+// Running/preparing sessions are never eligible. Existing snapshots without a
+// state timestamp use CreatedAt; finished reports use their actual finish time.
+func (st *Store) Expire(id string, now time.Time) (bool, error) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	s := st.m[id]
+	if s == nil {
+		return false, nil
+	}
+	at := s.StateChangedAt
+	if at.IsZero() {
+		at = s.CreatedAt
+	}
+	var ttl time.Duration
+	switch s.State {
+	case StateFailed:
+		ttl = 15 * time.Minute
+	case StateReady:
+		ttl = 2 * time.Hour
+	case StateFinished:
+		ttl = 24 * time.Hour
+		at = s.FinishedAt
+		if at.IsZero() {
+			at = s.CreatedAt
+		}
+	default:
+		return false, nil
+	}
+	if now.Before(at.Add(ttl)) {
+		return false, nil
+	}
+	if err := os.Remove(filepath.Join(st.dir, id+".json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	delete(st.m, id)
+	return true, nil
 }

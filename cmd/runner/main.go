@@ -6,10 +6,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"lcme/internal/sandbox"
@@ -87,26 +88,44 @@ func runVariant(dir, id, tmp string, testTimeout time.Duration) (res sandbox.Var
 	start := time.Now()
 	res = sandbox.VariantResult{ID: id, Tests: []sandbox.TestResult{}}
 	defer func() { res.DurationMs = time.Since(start).Milliseconds() }()
+	absoluteDir, err := filepath.Abs(dir)
+	if err != nil {
+		res.InfrastructureError = "Не удалось определить каталог тестового проекта."
+		return res
+	}
+	dir = absoluteDir
 
 	pkgs, err := testPackages(dir)
 	if err != nil {
-		res.BuildError = capOutput([]byte(err.Error()))
+		res.InfrastructureError = infrastructureFailure(err, err.Error())
+		if res.InfrastructureError == "" {
+			res.BuildError = capOutput([]byte(err.Error()))
+		}
 		return res
 	}
 	binDir := filepath.Join(tmp, id)
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		res.BuildError = capOutput([]byte(err.Error()))
+		res.InfrastructureError = "Не удалось подготовить временный каталог тестов."
 		return res
 	}
+	defer os.RemoveAll(binDir)
 	for n, pkg := range pkgs {
 		bin := filepath.Join(binDir, strconv.Itoa(n)+".test")
 		names, overlay, err := discoverAndInstrument(dir, pkg, bin)
 		if err != nil {
-			res.BuildError = capOutput([]byte(err.Error()))
+			res.InfrastructureError = infrastructureFailure(err, err.Error())
+			if res.InfrastructureError == "" {
+				res.BuildError = capOutput([]byte(err.Error()))
+			}
 			res.Tests = []sandbox.TestResult{}
 			return res
 		}
 		if out, err := goBuild(dir, pkg, bin, overlay); err != nil {
+			if problem := infrastructureFailure(err, string(out)); problem != "" {
+				res.InfrastructureError = problem
+				res.Tests = []sandbox.TestResult{}
+				return res
+			}
 			res.BuildError = capOutput(out)
 			if res.BuildError == "" {
 				res.BuildError = err.Error()
@@ -115,42 +134,76 @@ func runVariant(dir, id, tmp string, testTimeout time.Duration) (res sandbox.Var
 			return res
 		}
 		for _, name := range names {
-			res.Tests = append(res.Tests, runTest(dir, pkg, bin, name, testTimeout))
+			result := runTestTarget(dir, pkg, bin, name.RunName, name.Name, testTimeout)
+			result.Name = name.Name
+			res.Tests = append(res.Tests, result)
 		}
+		// Both the instrumented source and compiled package are no longer
+		// needed; retaining every package/variant can fill the shared tmpfs.
+		_ = os.Remove(bin)
+		_ = os.RemoveAll(filepath.Dir(overlay))
 	}
 	return res
 }
 
-// testPackages returns the sorted package dirs (relative, "." for the root)
-// that contain *_test.go files.
-func testPackages(root string) ([]string, error) {
-	set := map[string]bool{}
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		name := d.Name()
-		if d.IsDir() {
-			if p != root && (name == "testdata" || name == "vendor" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasSuffix(name, "_test.go") {
-			rel, err := filepath.Rel(root, filepath.Dir(p))
-			if err != nil {
-				return err
-			}
-			set[filepath.ToSlash(rel)] = true
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+func infrastructureFailure(err error, output string) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "Превышено время подготовки тестовой среды."
+	case errors.Is(err, syscall.ENOSPC) || strings.Contains(output, "no space left on device"):
+		return "Недостаточно временного места в среде запуска тестов."
+	case errors.Is(err, syscall.ENOMEM) || strings.Contains(output, "cannot allocate memory"):
+		return "Недостаточно памяти в среде запуска тестов."
+	default:
+		return ""
 	}
-	pkgs := make([]string, 0, len(set))
-	for p := range set {
-		pkgs = append(pkgs, p)
+}
+
+// Ask the same toolchain that builds the tests for the current module's
+// build-selected packages. This excludes nested modules and inactive tags.
+func testPackages(root string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "list", "-json", "./...")
+	cmd.Dir = root
+	sandbox.SetProcessGroup(cmd)
+	output := &boundedBuffer{limit: 4 << 20}
+	errout := &tail{n: sandbox.OutputCap}
+	cmd.Stdout, cmd.Stderr = output, errout
+	err := cmd.Run()
+	sandbox.KillGroup(cmd)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list packages: %w: %s", err, errout.bytes())
+	}
+	if output.overflow {
+		return nil, fmt.Errorf("package metadata exceeds 4 MiB")
+	}
+	var pkgs []string
+	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
+	for {
+		var info struct {
+			Dir                       string
+			TestGoFiles, XTestGoFiles []string
+		}
+		if err := decoder.Decode(&info); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return nil, err
+		}
+		if len(info.TestGoFiles)+len(info.XTestGoFiles) == 0 {
+			continue
+		}
+		rel, err := filepath.Rel(root, info.Dir)
+		if err != nil {
+			return nil, err
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("test package outside module")
+		}
+		pkgs = append(pkgs, filepath.ToSlash(rel))
 	}
 	sort.Strings(pkgs)
 	return pkgs, nil
@@ -166,10 +219,17 @@ func goBuild(dir, pkg, bin, overlay string) ([]byte, error) {
 	cmd.Stdout, cmd.Stderr = t, t
 	err := cmd.Run()
 	sandbox.KillGroup(cmd)
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
 	return t.bytes(), err
 }
 
 func runTest(dir, pkg, bin, name string, testTimeout time.Duration) sandbox.TestResult {
+	return runTestTarget(dir, pkg, bin, name, name, testTimeout)
+}
+
+func runTestTarget(dir, pkg, bin, name, target string, testTimeout time.Duration) sandbox.TestResult {
 	tr := sandbox.TestResult{Pkg: pkg, Name: name, Status: sandbox.StatusFail}
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout+3*time.Second)
 	defer cancel()
@@ -197,6 +257,7 @@ func runTest(dir, pkg, bin, name string, testTimeout time.Duration) sandbox.Test
 		received <- completionRead{data, err}
 	}()
 	cmd := exec.CommandContext(ctx, bin, "-test.run", "^"+regexp.QuoteMeta(name)+"$", "-test.count", "1", "-test.timeout", testTimeout.String(), "-test.paniconexit0")
+	cmd.Env = append(os.Environ(), "LCME_TEST_TARGET="+target)
 	cmd.Dir = filepath.Join(dir, filepath.FromSlash(pkg))
 	cmd.ExtraFiles = []*os.File{writer}
 	sandbox.SetProcessGroup(cmd)

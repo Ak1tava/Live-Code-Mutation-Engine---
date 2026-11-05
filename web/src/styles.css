@@ -228,6 +228,11 @@ progress { width: 100%; accent-color: var(--accent); }
 .plain-list > li:last-child { border-bottom: 0; }
 .plain-list p { margin-top: 4px; font-size: 13px; }
 .retry-button { justify-self: start; }
+.finish-confirm { padding: 12px; display: grid; gap: 8px; }
+.selection-stats > summary { padding: 12px; cursor: pointer; color: var(--muted); font-size: 13px; }
+.run-details > summary { cursor: pointer; }
+.run-details .result-panel { margin-top: 10px; }
+.run-details .panel-head { flex-wrap: wrap; }
 .badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; border-radius: 5px; font-size: 11px; line-height: 1.2; font-weight: 700; }
 .badge-neutral { color: #bfd1e9; background: #23344e; }
 .test-pass { color: #9cf5d3; background: #1d3d38; }
@@ -315,11 +320,8 @@ tbody th { font-weight: 500; }
   .header-role { padding-left: 8px; }
   .header-meta, .connection { font-size: 11px; }
   .explorer ul { max-height: 100px; }
-  .mutation-grid { gap: 5px; }
-  .mutation-card { padding: 6px; }
-  .mutation-card h2 { font-size: 13px; }
-  .mutation-card .badge { font-size: 9px; }
-  .mutation-path, .hint { font-size: 11px; }
+  .mutation-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .mutation-card { padding: 12px; }
   .report-banner { flex-wrap: wrap; }
   .report-time { margin-left: 52px; text-align: left; }
 }

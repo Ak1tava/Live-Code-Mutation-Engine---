@@ -3,13 +3,19 @@
 package mutate
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/parser"
+	"go/scanner"
 	"go/token"
+	"io"
+	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // Kind is the category of a mutation.
@@ -40,7 +46,11 @@ type Mutation struct {
 // ErrOverlap is returned by Apply when two mutations touch overlapping ranges.
 var ErrOverlap = errors.New("mutations overlap")
 
-const maxConstant = 100
+const (
+	maxConstant = 100
+	// Match the editor's file limit; leave room for three expanding mutations.
+	maxEditableBytes = 256 << 10
+)
 
 type opSwap struct {
 	repl string
@@ -66,6 +76,13 @@ func Generate(files map[string][]byte) ([]Mutation, error) {
 
 	var all []Mutation
 	for _, name := range names {
+		eligible, err := eligibleFile(name, files[name])
+		if err != nil {
+			return nil, err
+		}
+		if !eligible {
+			continue
+		}
 		ms, err := generateFile(name, files[name])
 		if err != nil {
 			return nil, err
@@ -78,6 +95,34 @@ func Generate(files map[string][]byte) ([]Mutation, error) {
 	return all, nil
 }
 
+// eligibleFile checks build constraints before parsing the body, which may be
+// invalid Go in an ignored tool or platform-specific file.
+func eligibleFile(name string, src []byte) (bool, error) {
+	if len(src) > maxEditableBytes || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+		return false, nil
+	}
+	fset := token.NewFileSet()
+	file := fset.AddFile(name, -1, len(src))
+	var scan scanner.Scanner
+	scan.Init(file, src, nil, scanner.ScanComments)
+	var headerEnd int
+	for {
+		pos, tok, lit := scan.Scan()
+		if tok != token.COMMENT {
+			headerEnd = file.Offset(pos)
+			break
+		}
+		if strings.HasPrefix(lit, "// Code generated ") && strings.HasSuffix(lit, " DO NOT EDIT.") {
+			return false, nil
+		}
+	}
+	header := append(bytes.Clone(src[:headerEnd]), []byte("package mutation\n")...)
+	ctx := build.Default
+	ctx.GOOS, ctx.GOARCH, ctx.CgoEnabled = "linux", "amd64", false
+	ctx.OpenFile = func(string) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(header)), nil }
+	return ctx.MatchFile(filepath.Dir(name), filepath.Base(name))
+}
+
 func generateFile(name string, src []byte) ([]Mutation, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, name, src, 0)
@@ -86,6 +131,9 @@ func generateFile(name string, src []byte) ([]Mutation, error) {
 	}
 	var ms []Mutation
 	add := func(fn string, pos token.Pos, length int, kind Kind, repl string) {
+		if len(src)+3*max(0, len(repl)-length) > maxEditableBytes {
+			return
+		}
 		// The editor and report refer to the physical file, even with //line directives.
 		p := fset.PositionFor(pos, false)
 		ms = append(ms, Mutation{

@@ -10,12 +10,12 @@ const kinds: Record<string, string> = {
 }
 
 export function MutationCard({ mutation, index, hint, fixed, onSelect }: {
-  mutation: Mutation; index: number; hint?: Hint; fixed: boolean; onSelect: () => void
+  mutation: Mutation; index: number; hint?: Hint; fixed?: boolean; onSelect: () => void
 }) {
   return <article className="panel mutation-card">
     <div className="mutation-top">
       <span className="mutation-index">{String(index + 1).padStart(2, '0')}</span>
-      <span className={`badge ${fixed ? 'test-pass' : 'badge-neutral'}`}>{fixed ? 'Исправлена' : 'Не исправлена'}</span>
+      <span className={`badge ${fixed ? 'test-pass' : 'badge-neutral'}`}>{fixed === undefined ? 'Не проверена' : fixed ? 'Исправлена' : 'Не исправлена'}</span>
     </div>
     <h2>{kinds[mutation.kind] ?? mutation.kind}</h2>
     <button type="button" className="text-link mutation-path" onClick={onSelect}>

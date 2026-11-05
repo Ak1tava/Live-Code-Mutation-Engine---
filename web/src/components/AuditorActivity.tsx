@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { AuditorFlag, Mutation, RunView, SessionEvent } from '../types'
-import { testCount } from './TestResults'
+import { TestResults, testCount } from './TestResults'
 
 const timeFormat = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 function time(at: string) {
@@ -21,6 +21,8 @@ function FlagReview({ flag, mutations, disabled, onReview }: {
         className={`button small ${mutationId === mutation.id ? 'is-selected' : 'secondary'}`}
         aria-pressed={mutationId === mutation.id}
         disabled={disabled} onClick={() => setChoice(mutation.id)}>#{index + 1}</button>)}
+      <button type="button" className="button secondary small" disabled={disabled || (!flag.mutationId && !mutationId)}
+        onClick={() => { setChoice(''); onReview('', false) }}>Снять привязку</button>
     </div>
     <div className="inline-actions review-actions">
       <button type="button" className="button secondary small"
@@ -28,7 +30,7 @@ function FlagReview({ flag, mutations, disabled, onReview }: {
       <button type="button" className="button secondary small"
         disabled={disabled || !mutationId} onClick={() => onReview(mutationId, false)}>Не принято</button>
     </div>
-    <div className="fine-print">{flag.accepted === null || mutationId !== flag.mutationId
+    <div className="fine-print">{!flag.mutationId && !mutationId ? 'Без привязки к мутации' : flag.accepted === null || mutationId !== flag.mutationId
       ? 'Ожидает решения' : flag.accepted ? 'Объяснение принято' : 'Объяснение не принято'}</div>
   </li>
 }
@@ -62,11 +64,16 @@ export function AuditorActivity({ flags, runs, events, mutations, disabled, onRe
         {runs.length === 0 && <p className="empty">Студент ещё не запускал тесты.</p>}
         <ul className="plain-list">{runs.slice().reverse().map((run, index) => {
           const { passed, total } = testCount(run)
-          return <li key={`${run.at}-${index}`} className="activity-row">
-            <div><strong>{run.final ? 'Финальный прогон' : `Прогон ${runs.length - index}`}</strong><time dateTime={run.at}>{time(run.at)}</time></div>
-            <span className={`badge ${total > 0 && passed === total ? 'test-pass' : 'badge-neutral'}`}>
-              {run.result.buildError ? 'Ошибка сборки или запуска' : `${passed} из ${total}`}
-            </span>
+          return <li key={`${run.at}-${index}`}>
+            <details className="run-details">
+              <summary className="activity-row">
+                <span><strong>{run.final ? 'Финальный прогон' : `Прогон ${runs.length - index}`}</strong><time dateTime={run.at}>{time(run.at)}</time></span>
+                <span className={`badge ${!run.result.infrastructureError && !run.result.buildError && total > 0 && passed === total ? 'test-pass' : 'badge-neutral'}`}>
+                  {run.result.infrastructureError ? 'Проверка недоступна' : run.result.buildError ? 'Ошибка сборки или запуска' : `${passed} из ${total}`}
+                </span>
+              </summary>
+              <TestResults run={run} running={false} />
+            </details>
           </li>
         })}</ul>
       </>}

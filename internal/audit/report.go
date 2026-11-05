@@ -18,12 +18,13 @@ type MutationReport struct {
 
 // Report is the auditor's summary of a session.
 type Report struct {
-	Mutations   []MutationReport `json:"mutations"`
-	Restored    bool             `json:"restored"`
-	HiddenCount int              `json:"hiddenCount"`
-	PasteCount  int              `json:"pasteCount"`
-	PasteChars  int              `json:"pasteChars"`
-	DurationSec int              `json:"durationSec"`
+	VerificationError string           `json:"verificationError,omitempty"`
+	Mutations         []MutationReport `json:"mutations"`
+	Restored          bool             `json:"restored"`
+	HiddenCount       int              `json:"hiddenCount"`
+	PasteCount        int              `json:"pasteCount"`
+	PasteChars        int              `json:"pasteChars"`
+	DurationSec       int              `json:"durationSec"`
 }
 
 // BuildReport computes the report. Fixed is judged by the tests of the last
@@ -36,6 +37,9 @@ func BuildReport(s *Session) Report {
 		if s.Runs[i].Final {
 			final = &s.Runs[i]
 		}
+	}
+	if final != nil {
+		r.VerificationError = final.Result.InfrastructureError
 	}
 
 	if s.Plan != nil {

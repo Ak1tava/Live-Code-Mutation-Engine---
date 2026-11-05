@@ -17,6 +17,7 @@ const stages = [
   ['baseline', 'Проверяем оригинал'],
   ['candidates', 'Ищем мутации'],
   ['triples', 'Проверяем независимость'],
+  ['done', 'Готовим подсказки'],
 ] as const
 
 function Preparation({ progress }: { progress: AuditorView['progress'] }) {
@@ -80,14 +81,27 @@ export default function AuditorRoute() {
 }
 
 function Auditor({ tok }: { tok: string }) {
-  const { view, connected, fatal, error: wireError, clearError } = useSession<AuditorView>(tok, 'a')
+  const { view, connected, snapshotVersion, getSnapshotVersion, fatal, error: wireError, clearError } = useSession<AuditorView>(tok, 'a')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const pending = useRef(false)
-  const [requestedFinish, setRequestedFinish] = useState(false)
+  const [requestedFinish, setRequestedFinish] = useState<number | null>(null)
+  const [confirmFinish, setConfirmFinish] = useState(false)
   const [selected, setSelected] = useState<{ path: string; line?: number }>()
   const seconds = useCountdown(view?.deadline, view?.serverNow)
   const endpoint = `/api/a/${encodeURIComponent(tok)}`
+
+  useEffect(() => {
+    if (requestedFinish !== null && snapshotVersion > requestedFinish && !view?.finishing) setRequestedFinish(null)
+  }, [requestedFinish, snapshotVersion, view?.finishing])
+
+  async function finish() {
+    const snapshot = getSnapshotVersion()
+    if (await perform('finish')) {
+      setRequestedFinish(snapshot)
+      setConfirmFinish(false)
+    }
+  }
 
   async function perform(path: string, body?: unknown) {
     if (pending.current || !connected) return false
@@ -116,13 +130,12 @@ function Auditor({ tok }: { tok: string }) {
     <Alert>{view.error || 'Сервер не смог подготовить задание.'}</Alert>
     <Link to="/" className="button primary">Другой репозиторий</Link>
   </section></main></>
-  if (view.state === 'finished') return <>{header}<main className="narrow report-page page"><ReportView audience="auditor" report={view.report} /></main></>
-
   const mutations = view.mutations ?? []
   const paths = [...new Set([...mutations.map(mutation => mutation.file), ...Object.keys(view.mutated ?? {}).sort()])]
   const file = selected && paths.includes(selected.path) ? selected.path : paths[0]
   const current = view.state === 'running'
-  const ending = !!view.finishing || requestedFinish || (current && seconds === 0)
+  const finished = view.state === 'finished'
+  const ending = !!view.finishing || (requestedFinish !== null && snapshotVersion <= requestedFinish) || (current && seconds === 0)
   const lastRun = view.runs?.at(-1)
   const passedTests = new Set((lastRun?.result.tests ?? []).filter(test => test.status === 'pass').map(test => `${test.pkg}:${test.name}`))
   const focus = selected?.path === file ? selected?.line : undefined
@@ -130,25 +143,45 @@ function Auditor({ tok }: { tok: string }) {
   if (focus !== undefined) lines.sort((left, right) => Math.abs(left - focus) - Math.abs(right - focus))
 
   return <>{header}<main className="page workspace auditor">
+    {finished && <ReportView audience="auditor" report={view.report} />}
     <div className="page-title">
-      <div><span className="eyebrow">Рабочее место аудитора</span><h1>Наблюдение</h1></div>
+      <div><span className="eyebrow">Рабочее место аудитора</span><h1>{finished ? 'Разбор сессии' : 'Наблюдение'}</h1></div>
       <div className="title-actions">
         <span className="badge badge-neutral">{ending ? 'Завершается' : states[view.state]}</span>
-        <Timer seconds={current ? seconds : 600} active={current} />
-        <button className="button secondary" disabled={!connected || !current || ending || busy}
-          onClick={() => void perform('finish').then(ok => { if (ok) setRequestedFinish(true) })}>Завершить</button>
+        {!finished && <Timer seconds={current ? seconds : 600} active={current} />}
+        {!finished && <button className="button secondary" disabled={!connected || !current || ending || busy}
+          onClick={() => setConfirmFinish(true)}>Завершить</button>}
+        {finished && view.report?.verificationError && <button className="button primary" disabled={!connected || ending || busy}
+          onClick={() => void finish()}>{ending || busy ? 'Проверяем…' : 'Повторить проверку'}</button>}
       </div>
     </div>
+    {confirmFinish && current && !ending && <section className="panel finish-confirm" role="region" aria-label="Подтверждение завершения">
+      <p>Завершить сессию? Студент больше не сможет редактировать код.</p>
+      <div className="inline-actions">
+        <button className="button primary small" disabled={!connected || busy} onClick={() => void finish()}>Да, завершить</button>
+        <button className="button secondary small" disabled={busy} onClick={() => setConfirmFinish(false)}>Продолжить работу</button>
+      </div>
+    </section>}
     {!connected && <Alert tone="warning">Связь прервалась. Показываем последние полученные данные.</Alert>}
     {ending && <Alert tone="warning">Выполняется финальный прогон. Отчёт появится автоматически.</Alert>}
     <Alert>{error || wireError}</Alert>
-    {view.studentUrl && <Invitation url={view.studentUrl} />}
+    {!finished && view.studentUrl && <Invitation url={view.studentUrl} />}
+    {view.stats && <details className="panel selection-stats">
+      <summary>Как подготовлено задание</summary>
+      <dl className="report-metrics">
+        <div><dt>Кандидаты</dt><dd>{view.stats.candidates}</dd></div>
+        <div><dt>Обнаружены тестами</dt><dd>{view.stats.killed}</dd></div>
+        <div><dt>Не обнаружены тестами</dt><dd>{view.stats.survived}</dd></div>
+        <div><dt>Ошибки сборки</dt><dd>{view.stats.buildErrors}</dd></div>
+        <div><dt>Проверено троек</dt><dd>{view.stats.triplesChecked}</dd></div>
+      </dl>
+    </details>}
     <div className="section-heading"><h2>Мутации</h2><span>Доступно аудитору</span></div>
     {mutations.length ? <div className="mutation-grid">{mutations.map((mutation, index) => {
       const tests = view.killingTests?.[index] ?? []
       return <MutationCard key={mutation.id} mutation={mutation} index={index}
         hint={view.hints?.find(hint => hint.mutationId === mutation.id)}
-        fixed={tests.length > 0 && tests.every(test => passedTests.has(test))}
+        fixed={view.report?.verificationError || lastRun?.result.infrastructureError ? undefined : tests.length > 0 && tests.every(test => passedTests.has(test))}
         onSelect={() => setSelected({ path: mutation.file, line: mutation.line })} />
     })}</div> : <p className="panel empty">Список мутаций пока недоступен.</p>}
     <div className="auditor-layout">
@@ -168,7 +201,7 @@ function Auditor({ tok }: { tok: string }) {
         </> : <p className="empty">Файлы для сравнения ещё не загружены.</p>}
       </section>
       <AuditorActivity flags={view.flags ?? []} runs={view.runs ?? []} events={view.events ?? []}
-        mutations={mutations} disabled={!connected || !current || ending || busy}
+        mutations={mutations} disabled={!connected || (!current && !finished) || ending || busy}
         onReview={(id, mutationId, accepted) => void perform(`flags/${encodeURIComponent(id)}`, { mutationId, accepted })} />
     </div>
   </main></>

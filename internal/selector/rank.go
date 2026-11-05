@@ -5,8 +5,6 @@ import (
 	"strings"
 )
 
-const topCandidates = 12
-
 // tripleIdx is a triple of indexes into the ranked candidate slice.
 type tripleIdx [3]int
 
@@ -15,9 +13,6 @@ type tripleIdx [3]int
 // different failing-test sets. cands must already be sorted by Score.
 func rankTriples(cands []Candidate) []tripleIdx {
 	n := len(cands)
-	if n > topCandidates {
-		n = topCandidates
-	}
 	failKey := make([]string, n)
 	for i := 0; i < n; i++ {
 		failKey[i] = strings.Join(cands[i].Failing, "\x00")

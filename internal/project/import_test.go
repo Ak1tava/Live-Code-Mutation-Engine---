@@ -266,9 +266,10 @@ func TestImportRejectsNewGo(t *testing.T) {
 	if !errors.Is(err, ErrGoTooNew) {
 		t.Errorf("err = %v", err)
 	}
-	// Versions compare numerically: 1.9 < 1.26, and a patch suffix is ignored.
+	// Major/minor and patch versions must all fit the available toolchain.
 	for _, v := range []string{"1.9", "1.26.1"} {
 		im = newImporter(t, fixture(t, "module m\n\ngo "+v+"\n", nil))
+		im.MaxGo = "1.26.1"
 		if _, err := im.Import(context.Background(), Source{GitURL: goodURL}); err != nil {
 			t.Errorf("go %s should be accepted: %v", v, err)
 		}

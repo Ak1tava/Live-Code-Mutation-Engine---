@@ -18,12 +18,22 @@ export async function request(path: string, init?: RequestInit): Promise<Respons
   return response
 }
 
-export function post(path: string, body?: unknown): Promise<Response> {
-  return request(path, {
-    method: 'POST',
-    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
+export async function post(path: string, body?: unknown): Promise<Response> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 15_000)
+  try {
+    return await request(path, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('Истекло время ожидания ответа. Проверьте состояние сессии и повторите попытку.')
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 export async function createAudit(body: { gitUrl?: string; example?: string }): Promise<{ auditorUrl: string }> {

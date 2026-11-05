@@ -236,10 +236,11 @@ func TestStudentViewHasNoAnswers(t *testing.T) {
 	}
 	v := f.request("GET", s, "", 200)
 	assertNoAnswers(v)
+	f.request("POST", s+"/start", "", 204)
+	v = f.request("GET", s, "", 200)
 	if got := v["files"].(map[string]any)["textkit.go"]; got != code {
 		t.Fatalf("student file = %q", got)
 	}
-	f.request("POST", s+"/start", "", 204)
 	f.request("POST", s+"/flags", `{"file":"textkit.go","line":2,"note":"граница"}`, 201)
 	f.request("POST", a+"/flags/f1", `{"mutationId":"m1","accepted":true}`, 204)
 	f.request("POST", s+"/finish", "", 202)

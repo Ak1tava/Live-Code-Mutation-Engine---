@@ -46,3 +46,20 @@ func TestLocalHandlerRejectsNonLoopbackHost(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionSelectionUsesUnpredictableSeed(t *testing.T) {
+	seen := map[int64]bool{}
+	for i := 0; i < 8; i++ {
+		opt, err := sessionSelectionOptions()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if opt.Seed == 0 || seen[opt.Seed] {
+			t.Fatalf("non-random session seed: %d", opt.Seed)
+		}
+		if opt.BaselineRuns != 3 || opt.MaxCandidates != 64 {
+			t.Fatalf("lost production limits: %+v", opt)
+		}
+		seen[opt.Seed] = true
+	}
+}

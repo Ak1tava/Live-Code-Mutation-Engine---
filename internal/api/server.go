@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -40,11 +41,13 @@ type Deps struct {
 }
 
 type Server struct {
-	d        Deps
-	sessions sync.Map // session ID → *sessionRuntime
-	handler  http.Handler
-	workers  chan struct{}
-	createMu sync.Mutex // serializes the retained-session limit with Store.Create
+	d            Deps
+	sessions     sync.Map // session ID → *sessionRuntime
+	handler      http.Handler
+	workers      chan struct{}
+	preparations chan struct{} // at most one preparation, reserving one worker for runs
+	createMu     sync.Mutex    // serializes the retained-session limit with Store.Create
+	created      []time.Time   // successful admissions, global rolling one-minute window
 }
 
 // mu serializes state changes, test captures and publication for one session.
@@ -67,7 +70,22 @@ func New(d Deps) *Server {
 	if d.PrepareTimeout <= 0 {
 		d.PrepareTimeout = 3 * time.Minute
 	}
-	s := &Server{d: d, workers: make(chan struct{}, 2)}
+	s := &Server{d: d, workers: make(chan struct{}, 2), preparations: make(chan struct{}, 1)}
+	// Preparation has no resumable job after a process restart. Persist a single
+	// terminal transition, keeping its diagnostic available for the failed TTL.
+	for _, id := range d.Store.IDs() {
+		preparing := false
+		d.Store.View(id, func(v *audit.Session) { preparing = v.State == audit.StatePreparing })
+		if preparing {
+			if err := d.Store.Update(id, func(v *audit.Session) error {
+				v.Fail("Подготовка прервана перезапуском сервера. Создайте новое задание.")
+				v.StateChangedAt = d.Now()
+				return nil
+			}); err != nil {
+				log.Printf("api: could not recover preparation: %v", err)
+			}
+		}
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/audits", s.create)
 	mux.HandleFunc("GET /api/a/{tok}", s.authorize(audit.RoleAuditor, s.getView))
@@ -84,6 +102,7 @@ func New(d Deps) *Server {
 	s.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
 		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
 			if r.ContentLength > maxJSONBody {
@@ -143,6 +162,10 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		writeSessionError(w, errSourceDisabled)
 		return
 	}
+	if err := s.d.Importer.ValidateSource(src); err != nil {
+		writeError(w, http.StatusBadRequest, project.UserMessage(err))
+		return
+	}
 	session := audit.New(src, s.d.Now())
 	if err := s.admitSession(session); err != nil {
 		writeSessionError(w, err)
@@ -156,20 +179,59 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 
 // Admission happens before persistence and before launching any background work.
 func (s *Server) admitSession(session *audit.Session) error {
-	if !s.acquireWorker() {
-		return errOverloaded
-	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
+	s.pruneSessions()
+	now := s.d.Now()
+	kept := s.created[:0]
+	for _, at := range s.created {
+		if now.Before(at.Add(time.Minute)) {
+			kept = append(kept, at)
+		}
+	}
+	s.created = kept
+	if len(s.created) >= 6 {
+		return errCreateRate
+	}
 	if len(s.d.Store.IDs()) >= 64 {
-		s.releaseWorker()
 		return errSessionCapacity
+	}
+	select {
+	case s.preparations <- struct{}{}:
+	default:
+		return errOverloaded
+	}
+	if !s.acquireWorker() {
+		<-s.preparations
+		return errOverloaded
 	}
 	if err := s.d.Store.Create(session); err != nil {
 		s.releaseWorker()
+		<-s.preparations
 		return err
 	}
+	s.created = append(s.created, now)
 	return nil
+}
+
+func (s *Server) pruneSessions() {
+	for _, id := range s.d.Store.IDs() {
+		rt := s.runtime(id)
+		rt.mu.Lock()
+		if !rt.active {
+			removed, err := s.d.Store.Expire(id, s.d.Now())
+			if err != nil {
+				log.Printf("api: could not expire session: %v", err)
+			}
+			if removed {
+				for p := range rt.peers {
+					p.cancel()
+				}
+				s.sessions.Delete(id)
+			}
+		}
+		rt.mu.Unlock()
+	}
 }
 
 func (s *Server) acquireWorker() bool {
@@ -185,6 +247,7 @@ func (s *Server) releaseWorker() { <-s.workers }
 
 func (s *Server) prepare(id string, src project.Source) {
 	defer s.releaseWorker()
+	defer func() { <-s.preparations }()
 	ctx, cancel := context.WithTimeout(context.Background(), s.d.PrepareTimeout)
 	defer cancel()
 	p, err := s.d.Importer.Import(ctx, src)
@@ -204,18 +267,24 @@ func (s *Server) prepare(id string, src project.Source) {
 			log.Printf("api: failed to save preparation progress: %v", err)
 		}
 	})
+	if err != nil {
+		log.Printf("api: preparation failed: %v", err)
+	}
 	switch {
 	case ctx.Err() != nil:
 		s.failPreparation(id, "Превышено время подготовки задания. Попробуйте проект меньшего размера.")
 		return
 	case errors.Is(err, selector.ErrBaselineRed):
-		s.failPreparation(id, "Тесты исходного проекта должны пройти три раза подряд.")
+		s.failPreparation(id, baselineMessage(err))
 		return
 	case errors.Is(err, selector.ErrNoTriple):
 		s.failPreparation(id, "Не удалось подобрать три независимые мутации.")
 		return
+	case errors.Is(err, selector.ErrInfrastructure):
+		s.failPreparation(id, "Среда подготовки задания недоступна. Повторите попытку позже.")
+		return
 	case err != nil:
-		s.failPreparation(id, project.UserMessage(err))
+		s.failPreparation(id, "Не удалось завершить проверку задания. Повторите подготовку позже.")
 		return
 	}
 
@@ -235,6 +304,7 @@ func (s *Server) prepare(id string, src project.Source) {
 	}
 	if err := s.change(id, func(v *audit.Session) error {
 		v.SetReady(p, plan, h)
+		v.StateChangedAt = s.d.Now()
 		return nil
 	}); err != nil {
 		s.failPreparation(id, "Не удалось сохранить подготовленное задание.")
@@ -244,6 +314,7 @@ func (s *Server) prepare(id string, src project.Source) {
 func (s *Server) failPreparation(id, message string) {
 	if err := s.change(id, func(v *audit.Session) error {
 		v.Fail(message)
+		v.StateChangedAt = s.d.Now()
 		return nil
 	}); err != nil {
 		log.Printf("api: failed to save preparation error: %v", err)
@@ -319,13 +390,15 @@ func (s *Server) reviewFlag(w http.ResponseWriter, r *http.Request, id string, _
 	if !readBody(w, r, &body) {
 		return
 	}
-	if body.MutationID == "" || body.Accepted == nil {
+	if body.Accepted == nil {
 		writeError(w, http.StatusBadRequest, "Укажите мутацию и решение по отметке.")
 		return
 	}
 	err := s.change(id, func(v *audit.Session) error {
-		if err := checkOpen(v, s.d.Now()); err != nil {
-			return err
+		if v.State != audit.StateFinished {
+			if err := checkOpen(v, s.d.Now()); err != nil {
+				return err
+			}
 		}
 		return v.ReviewFlag(r.PathValue("flagId"), body.MutationID, *body.Accepted)
 	})
@@ -374,10 +447,21 @@ var (
 	errOverloaded      = errors.New("api: all workers busy")
 	errSessionCapacity = errors.New("api: retained session limit reached")
 	errLine            = errors.New("api: invalid line")
+	errCreateRate      = errors.New("api: create rate limit")
 )
 
 func sessionError(err error) (int, string) {
 	switch {
+	case errors.Is(err, errCreateRate):
+		return http.StatusTooManyRequests, "Лимит создания заданий: 6 в минуту. Подождите минуту."
+	case errors.Is(err, audit.ErrFlagLimit):
+		return http.StatusTooManyRequests, "Достигнут лимит: 100 отметок на сессию."
+	case errors.Is(err, audit.ErrNoteTooBig):
+		return http.StatusRequestEntityTooLarge, "Пояснение к отметке больше 4096 байт."
+	case errors.Is(err, audit.ErrEventLimit):
+		return http.StatusTooManyRequests, "Достигнут лимит: 1000 событий на сессию."
+	case errors.Is(err, os.ErrNotExist):
+		return http.StatusNotFound, "Сессия не найдена или срок хранения истёк."
 	case errors.Is(err, errSourceDisabled):
 		return http.StatusForbidden, "В этом режиме доступен только демо-проект textkit."
 	case errors.Is(err, errBusy):
@@ -433,6 +517,9 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if info, err := fs.Stat(s.d.Static, name); err == nil && !info.IsDir() && name != "index.html" {
+		if hashedAsset.MatchString(name) {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
 		http.FileServerFS(s.d.Static).ServeHTTP(w, r)
 		return
 	}
@@ -443,4 +530,27 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(b))
+}
+
+var hashedAsset = regexp.MustCompile(`^assets/[^/]+-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9.]+$`)
+
+func baselineMessage(err error) string {
+	message := "Тесты исходного проекта должны пройти три раза подряд."
+	var detail *selector.BaselineError
+	if !errors.As(err, &detail) {
+		return message
+	}
+	switch detail.Kind {
+	case "build":
+		return message + " Исходный проект не компилируется. Проверьте сборку и версию Go."
+	case "tests":
+		if len(detail.FailingTests) != 0 {
+			return message + " Не прошли тесты: " + strings.Join(detail.FailingTests, ", ") + "."
+		}
+	case "test_set":
+		return message + " Состав тестов меняется между прогонами."
+	case "no_tests":
+		return message + " Не найдено выполняемых тестов."
+	}
+	return message
 }

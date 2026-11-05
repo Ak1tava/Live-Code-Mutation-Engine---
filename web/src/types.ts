@@ -11,7 +11,7 @@ export interface TestResult {
 export interface RunView {
   at: string
   final: boolean
-  result: { id: string; buildError: string; tests: TestResult[] | null; durationMs: number }
+  result: { id: string; buildError: string; infrastructureError?: string; tests: TestResult[] | null; durationMs: number }
 }
 
 export interface Flag {
@@ -30,6 +30,7 @@ export interface AuditorFlag extends Flag {
 export interface ReportSummary {
   restored: boolean
   durationSec: number
+  verificationError?: string
 }
 
 export interface Mutation {

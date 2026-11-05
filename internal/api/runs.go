@@ -38,10 +38,25 @@ func (s *Server) run(w http.ResponseWriter, _ *http.Request, id string, _ audit.
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (s *Server) finish(w http.ResponseWriter, _ *http.Request, id string, _ audit.Role) {
+func (s *Server) finish(w http.ResponseWriter, _ *http.Request, id string, role audit.Role) {
 	rt := s.runtime(id)
 	rt.mu.Lock()
-	changed, err := s.requestFinishLocked(context.Background(), id, rt, false)
+	retry := false
+	s.d.Store.View(id, func(v *audit.Session) {
+		retry = v.State == audit.StateFinished && audit.BuildReport(v).VerificationError != ""
+	})
+	var changed bool
+	var err error
+	if retry {
+		if role != audit.RoleAuditor {
+			err = audit.ErrBadState
+		} else {
+			err = s.startRunLocked(context.Background(), id, rt, true)
+			changed = err == nil
+		}
+	} else {
+		changed, err = s.requestFinishLocked(context.Background(), id, rt, false)
+	}
 	if changed {
 		s.broadcastLocked(id, rt)
 	}
@@ -55,6 +70,7 @@ func (s *Server) finish(w http.ResponseWriter, _ *http.Request, id string, _ aud
 
 // Tick queues final runs for expired sessions and resumes persisted finish requests.
 func (s *Server) Tick(ctx context.Context) {
+	s.pruneSessions()
 	for _, id := range s.d.Store.IDs() {
 		if ctx.Err() != nil {
 			return
@@ -119,8 +135,9 @@ func (s *Server) startRunLocked(ctx context.Context, id string, rt *sessionRunti
 		return err
 	}
 	job := runJob{id: id, at: s.d.Now(), final: final}
-	var err error
+	err := error(os.ErrNotExist)
 	s.d.Store.View(id, func(v *audit.Session) {
+		err = nil
 		job.allowed = s.sourceAllowed(v.Source)
 		if final {
 			job.at = v.FinishRequestedAt
@@ -185,7 +202,7 @@ func (s *Server) runTests(parent context.Context, job runJob) sandbox.VariantRes
 	const variant = "v"
 	started := time.Now()
 	failure := func(message string) sandbox.VariantResult {
-		return sandbox.VariantResult{ID: variant, BuildError: message, DurationMs: time.Since(started).Milliseconds()}
+		return sandbox.VariantResult{ID: variant, InfrastructureError: message, DurationMs: time.Since(started).Milliseconds()}
 	}
 	if !job.allowed {
 		return failure("В этом режиме доступен только демо-проект textkit.")
@@ -220,6 +237,9 @@ func (s *Server) runTests(parent context.Context, job runJob) sandbox.VariantRes
 	}
 	for _, result := range results {
 		if result.ID == variant {
+			if result.InfrastructureError != "" {
+				return failure("Сбой среды проверки. Аудитор может повторить итоговую проверку.")
+			}
 			return result
 		}
 	}

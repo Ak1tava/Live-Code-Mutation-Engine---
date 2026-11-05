@@ -28,7 +28,7 @@ export class SaveQueue {
   private send?: Send
   private revision = 0
 
-  constructor(private readonly changed: () => void) {}
+  constructor(private readonly changed: () => void, private readonly reconnect?: () => void) {}
 
   get dirty() {
     return this.drafts.size > 0
@@ -76,16 +76,16 @@ export class SaveQueue {
     this.settle(reason)
   }
 
-  edit(path: string, content: string) {
+  edit(path: string, content: string, immediate = false) {
     if (content === this.content(path)) return
     const draft = this.drafts.get(path)
     clearTimeout(draft?.debounce)
     const next: Draft = {
       write: { type: 'file', path, content, revision: ++this.revision },
-      ready: false,
+      ready: immediate,
       flight: draft?.flight,
     }
-    next.debounce = setTimeout(() => {
+    if (!immediate) next.debounce = setTimeout(() => {
       next.ready = true
       this.pump()
     }, 1000)
@@ -143,7 +143,8 @@ export class SaveQueue {
         return
       }
       const timeout = setTimeout(() => {
-        this.reject(write.path, 'Сервер не подтвердил сохранение. Повторите попытку.', write.revision)
+        this.disconnect('Сервер не подтвердил сохранение. Восстанавливаем соединение; черновик сохранён в этой вкладке.')
+        this.reconnect?.()
       }, 10_000)
       draft.flight = { write, timeout }
     }

@@ -32,6 +32,9 @@ const (
 	SessionDuration = 10 * time.Minute
 	// MaxFileSize is the largest file a student may submit.
 	MaxFileSize = 256 << 10
+	MaxFlags    = 100
+	MaxFlagNote = 4096
+	MaxEvents   = 1000
 )
 
 // Role identifies who a token belongs to.
@@ -51,6 +54,9 @@ var (
 	ErrUnknownFlag     = errors.New("audit: unknown flag")
 	ErrUnknownMutation = errors.New("audit: unknown mutation")
 	ErrInvalidEvent    = errors.New("audit: invalid behavioural event")
+	ErrFlagLimit       = errors.New("audit: flag limit reached")
+	ErrNoteTooBig      = errors.New("audit: flag note too big")
+	ErrEventLimit      = errors.New("audit: event limit reached")
 )
 
 // Flag is a place in the code the student marked as suspicious.
@@ -91,6 +97,7 @@ type Session struct {
 	Tests                          map[string][]byte // *_test.go and other read-only files
 	Mutated                        map[string][]byte // the task as issued (left side of the diff)
 	CreatedAt, StartedAt           time.Time
+	StateChangedAt                 time.Time // retention clock for ready/failed; old snapshots fall back to CreatedAt
 	Deadline, FinishedAt           time.Time
 	FinishRequestedAt              time.Time // freezes student input before the final run
 	Flags                          []Flag
@@ -109,12 +116,13 @@ func randomHex() string {
 // New creates a session in the preparing state with fresh random tokens.
 func New(src project.Source, now time.Time) *Session {
 	return &Session{
-		ID:           randomHex(),
-		AuditorToken: randomHex(),
-		StudentToken: randomHex(),
-		Source:       src,
-		State:        StatePreparing,
-		CreatedAt:    now,
+		ID:             randomHex(),
+		AuditorToken:   randomHex(),
+		StudentToken:   randomHex(),
+		Source:         src,
+		State:          StatePreparing,
+		CreatedAt:      now,
+		StateChangedAt: now,
 	}
 }
 
@@ -201,6 +209,12 @@ func (s *Session) AddFlag(file string, line int, note string, now time.Time) (Fl
 	if err := s.checkRunning(now); err != nil {
 		return Flag{}, err
 	}
+	if len(s.Flags) >= MaxFlags {
+		return Flag{}, ErrFlagLimit
+	}
+	if len(note) > MaxFlagNote {
+		return Flag{}, ErrNoteTooBig
+	}
 	f := Flag{ID: fmt.Sprintf("f%d", len(s.Flags)+1), File: file, Line: line, Note: note, At: now}
 	s.Flags = append(s.Flags, f)
 	return f, nil
@@ -219,7 +233,7 @@ func (s *Session) ReviewFlag(flagID, mutationID string, accepted bool) error {
 	if idx < 0 {
 		return ErrUnknownFlag
 	}
-	known := false
+	known := mutationID == ""
 	if s.Plan != nil {
 		for _, m := range s.Plan.Mutations {
 			if m.ID == mutationID {
@@ -232,7 +246,11 @@ func (s *Session) ReviewFlag(flagID, mutationID string, accepted bool) error {
 		return ErrUnknownMutation
 	}
 	s.Flags[idx].MutationID = mutationID
-	s.Flags[idx].Accepted = &accepted
+	if mutationID == "" {
+		s.Flags[idx].Accepted = nil
+	} else {
+		s.Flags[idx].Accepted = &accepted
+	}
 	return nil
 }
 
@@ -243,6 +261,9 @@ func (s *Session) AddEvent(kind string, size int, now time.Time) error {
 	}
 	if size < 0 || (kind != "hidden" && kind != "visible" && kind != "paste") {
 		return ErrInvalidEvent
+	}
+	if len(s.Events) >= MaxEvents {
+		return ErrEventLimit
 	}
 	s.Events = append(s.Events, Event{At: now, Kind: kind, Size: size})
 	return nil

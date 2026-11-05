@@ -222,7 +222,7 @@ func TestEvaluateBoundsCandidateBatches(t *testing.T) {
 	}
 }
 
-func TestEvaluateRetainsStableTopCandidatesAcrossBatches(t *testing.T) {
+func TestEvaluateRetainsBoundedCandidatesAcrossBatches(t *testing.T) {
 	const source = "package p\nfunc f(n int) int {\n" +
 		"_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n" +
 		"_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n_ = 1\n" +
@@ -233,10 +233,10 @@ func TestEvaluateRetainsStableTopCandidatesAcrossBatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cands) != 12 || len(kept) != 12 || stats.Killed != 18 {
+	if len(cands) != 18 || len(kept) != 18 || stats.Killed != 18 {
 		t.Fatalf("candidates=%d kept=%d stats=%+v", len(cands), len(kept), stats)
 	}
-	want := []string{"c17", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11"}
+	want := []string{"c17", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11", "c12", "c13", "c14", "c15", "c16", "c18"}
 	for i, c := range cands {
 		if c.M.ID != want[i] || kept[c.M.ID].ID != c.M.ID {
 			t.Errorf("candidate[%d] = %s, want %s and matching result", i, c.M.ID, want[i])

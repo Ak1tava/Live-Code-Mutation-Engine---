@@ -16,11 +16,11 @@ export function ReportView(props: Props) {
       <button className="button secondary no-print" onClick={() => window.print()}>Печать</button>
     </div>
     {report ? <>
-      <div className={`panel report-banner ${report.restored ? 'restored' : ''}`}>
-        <span className="report-icon" aria-hidden="true">{report.restored ? '✓' : '!'}</span>
+      <div className={`panel report-banner ${!report.verificationError && report.restored ? 'restored' : ''}`}>
+        <span className="report-icon" aria-hidden="true">{!report.verificationError && report.restored ? '✓' : '!'}</span>
         <div>
-          <h2>{report.restored ? 'Проект восстановлен' : 'Проект не восстановлен'}</h2>
-          <p>{report.restored ? 'Все тесты финального прогона прошли.' : 'Финальный прогон не подтвердил исправность проекта.'}</p>
+          <h2>{report.verificationError ? 'Оценка недоступна' : report.restored ? 'Проект восстановлен' : 'Проект не восстановлен'}</h2>
+          <p>{report.verificationError || (report.restored ? 'Все тесты финального прогона прошли.' : 'Финальный прогон не подтвердил исправность проекта.')}</p>
         </div>
         <div className="report-time"><span>Длительность</span><strong>{duration(Math.max(0, report.durationSec))}</strong></div>
       </div>
@@ -33,7 +33,7 @@ export function ReportView(props: Props) {
               <th scope="row"><code>{mutation.file}:{mutation.line}</code><br /><code>{mutation.orig} → {mutation.repl}</code></th>
               <td><Result value={mutation.detected} /></td>
               <td><Result value={mutation.explained} /></td>
-              <td><Result value={mutation.fixed} /></td>
+              <td>{report.verificationError ? <span className="badge badge-neutral">Не проверена</span> : <Result value={mutation.fixed} />}</td>
               <td>{mutation.fixedAfterSec < 0 ? '—' : duration(mutation.fixedAfterSec)}</td>
             </tr>)}</tbody>
           </table></div>
